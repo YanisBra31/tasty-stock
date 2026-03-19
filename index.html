@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TASTY STOCK</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+
+  <!-- ⚠️ Supabase JS — chargé EN PREMIER avant app.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════
+     LOGIN SCREEN
+     (identifiant = email Supabase)
+══════════════════════════════════════ -->
+<div id="s-login" class="screen active">
+  <div class="login-wrap">
+    <div class="login-logo">TASTY <span>STOCK</span></div>
+    <div class="login-sub">Gestion de stock — Multi-sites</div>
+    <div class="field">
+      <label>Email ou identifiant</label>
+      <input id="li-user" type="text" placeholder="yanis ou yanis@email.com" autocomplete="username">
+    </div>
+    <div class="field">
+      <label>Mot de passe</label>
+      <input id="li-pass" type="password" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <button class="btn-primary" onclick="doLogin()">CONNEXION →</button>
+    <div class="login-err" id="login-err"></div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════
+     CHOOSE RESTAURANT SCREEN
+══════════════════════════════════════ -->
+<div id="s-choose" class="screen">
+  <div class="choose-bg-text">TASTY</div>
+  <div class="choose-top">
+    <h1 id="choose-greeting">Bonjour — Choisir un espace</h1>
+    <p>Sélectionnez le restaurant à gérer</p>
+  </div>
+  <div id="resto-grid" class="resto-grid"></div>
+  <button class="btn-add-resto" onclick="openRestoModal()">＋ Ajouter un restaurant</button>
+</div>
+
+<!-- ══════════════════════════════════════
+     APP LAYOUT
+══════════════════════════════════════ -->
+<div id="s-app">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="sb-logo">TASTY <span>STOCK</span></div>
+    <div id="sb-badge" class="sb-badge b1">
+      <div class="sb-badge-dot"></div>
+      <span id="sb-badge-label">Restaurant</span>
+    </div>
+
+    <div class="sb-section">
+      <div class="sb-section-label">Principal</div>
+      <div class="nav-item active" data-page="dashboard" onclick="showPage('dashboard',this)">
+        <span class="ni">▦</span> Dashboard
+      </div>
+      <div class="nav-item" data-page="stock" onclick="showPage('stock',this)">
+        <span class="ni">📦</span> Stock &amp; DLC
+      </div>
+      <div class="nav-item" data-page="alertes" onclick="showPage('alertes',this)">
+        <span class="ni">🔔</span> Alertes
+        <span class="nav-badge" id="nav-alert-count">0</span>
+      </div>
+
+      <div class="sb-section-label">Multi-sites</div>
+      <div class="nav-item" data-page="transferts" onclick="showPage('transferts',this)">
+        <span class="ni">🔄</span> Transferts
+      </div>
+      <div class="nav-item" data-page="comparaison" onclick="showPage('comparaison',this)">
+        <span class="ni">↔</span> Comparaison
+      </div>
+
+      <div class="sb-section-label">Administration</div>
+      <div class="nav-item" data-page="utilisateurs" onclick="showPage('utilisateurs',this)">
+        <span class="ni">👥</span> Utilisateurs
+      </div>
+      <div class="nav-item" data-page="restaurants" onclick="showPage('restaurants',this)">
+        <span class="ni">🏪</span> Restaurants
+      </div>
+    </div>
+
+    <div class="sb-footer">
+      <button class="btn-switch" onclick="goChoose()">⇄ Changer de restaurant</button>
+      <div class="user-row">
+        <div class="u-avatar" id="sb-avatar">?</div>
+        <div>
+          <div class="u-name" id="sb-username">…</div>
+          <div class="u-role" id="sb-role">…</div>
+        </div>
+        <button class="btn-logout" onclick="doLogout()">QUITTER</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <div class="main-content">
+
+    <!-- ── DASHBOARD ── -->
+    <div id="page-dashboard" class="page active">
+      <div class="page-header">
+        <div class="ph-left">
+          <h1>TASTY <em>ANALYTICS</em></h1>
+          <p id="dash-update">Dernière MAJ : —</p>
+        </div>
+        <div class="ph-actions">
+          <button class="btn" onclick="exportCSV()">⬇ CSV</button>
+          <button class="btn" onclick="exportPDF()">📄 PDF</button>
+          <button class="btn accent" onclick="openModal('add')">＋ Saisie rapide</button>
+        </div>
+      </div>
+      <div class="kpi-row">
+        <div class="kpi kb"><div class="kpi-label">Volume total</div><div class="kpi-value" id="kpi-vol">0</div></div>
+        <div class="kpi kp"><div class="kpi-label">Alertes / Ruptures</div><div class="kpi-value" id="kpi-alert">0</div></div>
+        <div class="kpi ko"><div class="kpi-label">Péremptions ≤ 3j</div><div class="kpi-value" id="kpi-perm">0</div></div>
+        <div class="kpi ky"><div class="kpi-label">Références</div><div class="kpi-value" id="kpi-refs">0</div></div>
+      </div>
+      <div class="charts-row">
+        <div class="chart-card">
+          <div class="chart-card-title">SANTÉ DU STOCK</div>
+          <div class="donut-wrap">
+            <svg class="donut-svg" width="130" height="130" viewBox="0 0 130 130">
+              <circle cx="65" cy="65" r="50" fill="none" stroke="#1c1c1c" stroke-width="18"/>
+              <circle id="donut-ok"  cx="65" cy="65" r="50" fill="none" stroke="#00e5a0" stroke-width="18" stroke-dasharray="314" stroke-dashoffset="314" stroke-linecap="round" transform="rotate(-90 65 65)" style="transition:stroke-dashoffset 1s ease"/>
+              <circle id="donut-low" cx="65" cy="65" r="50" fill="none" stroke="#ff8c00" stroke-width="18" stroke-dasharray="314" stroke-dashoffset="314" stroke-linecap="round" transform="rotate(-90 65 65)" style="transition:stroke-dashoffset 1s ease"/>
+              <circle id="donut-out" cx="65" cy="65" r="50" fill="none" stroke="#ff2d78" stroke-width="18" stroke-dasharray="314" stroke-dashoffset="314" stroke-linecap="round" transform="rotate(-90 65 65)" style="transition:stroke-dashoffset 1s ease"/>
+            </svg>
+            <div class="donut-legend">
+              <div class="dl-item"><div class="dl-dot" style="background:var(--green)"></div><span>OK</span><span class="dl-pct" id="dl-ok">0%</span></div>
+              <div class="dl-item"><div class="dl-dot" style="background:var(--orange)"></div><span>Stock bas</span><span class="dl-pct" id="dl-low">0%</span></div>
+              <div class="dl-item"><div class="dl-dot" style="background:var(--pink)"></div><span>Rupture</span><span class="dl-pct" id="dl-out">0%</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-title">TOP ALERTES RÉAPPRO</div>
+          <div id="dash-alerts-list" class="alert-list"></div>
+        </div>
+      </div>
+      <div class="sec-title">Dernières entrées</div>
+      <div id="dash-recent"></div>
+    </div>
+
+    <!-- ── STOCK ── -->
+    <div id="page-stock" class="page">
+      <div class="page-header">
+        <div class="ph-left"><h1>STOCK <em>&amp; DLC</em></h1><p id="stock-resto-label">Restaurant —</p></div>
+        <div class="ph-actions">
+          <button class="btn" onclick="exportCSV()">⬇ CSV</button>
+          <button class="btn" onclick="exportPDF()">📄 PDF</button>
+          <button class="btn accent" onclick="openModal('add')">＋ Ajouter</button>
+        </div>
+      </div>
+      <div class="toolbar">
+        <input class="search-input" id="stock-search" type="text" placeholder="🔍  Rechercher..." oninput="renderStock()">
+        <select class="select-input" id="stock-cat" onchange="renderStock()">
+          <option value="">Toutes catégories</option>
+          <option>Boissons</option><option>Épicerie</option><option>Frais</option>
+          <option>Surgelé</option><option>Alcool</option><option>Hygiène</option><option>Autre</option>
+        </select>
+        <select class="select-input" id="stock-filter" onchange="renderStock()">
+          <option value="">Tous statuts</option>
+          <option value="ok">OK</option>
+          <option value="low">Stock bas</option>
+          <option value="out">Rupture</option>
+          <option value="exp">DLC dépassée</option>
+        </select>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="sortable" onclick="sortBy('name')">Référence ↕</th>
+              <th class="sortable" onclick="sortBy('category')">Catégorie ↕</th>
+              <th class="sortable" onclick="sortBy('qty')">Quantité ↕</th>
+              <th>Min.</th>
+              <th class="sortable" onclick="sortBy('dlc')">DLC ↕</th>
+              <th>Statut</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="stock-tbody"></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="stock-pagination"></div>
+    </div>
+
+    <!-- ── ALERTES ── -->
+    <div id="page-alertes" class="page">
+      <div class="page-header">
+        <div class="ph-left"><h1>ALERTES <em>ACTIVES</em></h1><p id="alertes-count">— alertes</p></div>
+      </div>
+      <div id="alertes-container"></div>
+    </div>
+
+    <!-- ── TRANSFERTS ── -->
+    <div id="page-transferts" class="page">
+      <div class="page-header">
+        <div class="ph-left"><h1>TRANSFERTS <em>INTER-SITES</em></h1><p>Déplacer du stock d'un restaurant à l'autre</p></div>
+      </div>
+      <div class="transfer-layout">
+        <div class="transfer-panel">
+          <div class="tp-title">NOUVEAU TRANSFERT</div>
+          <div class="transfer-form">
+            <div class="form-field">
+              <label>De</label>
+              <select class="select-input" id="tr-from" style="width:100%" onchange="loadTransferItems()"></select>
+            </div>
+            <div class="form-field">
+              <label>Vers</label>
+              <select class="select-input" id="tr-to" style="width:100%"></select>
+            </div>
+            <div class="form-field">
+              <label>Référence</label>
+              <select class="select-input" id="tr-item" style="width:100%"><option>— Sélectionner —</option></select>
+            </div>
+            <div class="form-field">
+              <label>Quantité</label>
+              <input type="number" min="1" id="tr-qty" class="search-input" placeholder="Ex: 5" style="flex:none">
+            </div>
+            <button class="btn green-btn" style="width:100%;justify-content:center;padding:12px" onclick="doTransfer()">CONFIRMER LE TRANSFERT →</button>
+          </div>
+        </div>
+        <div class="transfer-panel">
+          <div class="tp-title">HISTORIQUE DES TRANSFERTS</div>
+          <div id="transfer-history-list"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── COMPARAISON ── -->
+    <div id="page-comparaison" class="page">
+      <div class="page-header">
+        <div class="ph-left"><h1>COMPARAISON <em>MULTI-SITES</em></h1><p>Vue consolidée de tous les restaurants</p></div>
+      </div>
+      <div id="compare-content"></div>
+    </div>
+
+    <!-- ── UTILISATEURS ── -->
+    <div id="page-utilisateurs" class="page">
+      <div class="page-header">
+        <div class="ph-left"><h1>GESTION <em>UTILISATEURS</em></h1><p id="users-count">—</p></div>
+        <div class="ph-actions"><button class="btn accent" onclick="openUserModal()">＋ Inviter</button></div>
+      </div>
+      <div id="users-list"></div>
+    </div>
+
+    <!-- ── RESTAURANTS ── -->
+    <div id="page-restaurants" class="page">
+      <div class="page-header">
+        <div class="ph-left"><h1>GESTION <em>RESTAURANTS</em></h1><p id="restos-count">—</p></div>
+        <div class="ph-actions"><button class="btn accent" onclick="openRestoModal()">＋ Ajouter</button></div>
+      </div>
+      <div id="restos-admin-list"></div>
+    </div>
+
+  </div><!-- /main-content -->
+</div><!-- /s-app -->
+
+<!-- ══════════════════════════════════════
+     MODALS
+══════════════════════════════════════ -->
+
+<!-- Modal stock item -->
+<div id="modal-overlay" class="modal-overlay" onclick="closeModalOnBg(event)">
+  <div class="modal">
+    <div class="modal-title" id="modal-title">AJOUTER UNE RÉFÉRENCE</div>
+    <div class="form-grid">
+      <div class="form-field" style="grid-column:1/-1">
+        <label>Nom de la référence *</label>
+        <input id="f-name" type="text" placeholder="Ex: Coca-Cola 33cl">
+      </div>
+      <div class="form-field">
+        <label>Catégorie</label>
+        <select id="f-cat">
+          <option>Boissons</option><option>Épicerie</option><option>Frais</option>
+          <option>Surgelé</option><option>Alcool</option><option>Hygiène</option><option>Autre</option>
+        </select>
+      </div>
+      <div class="form-field">
+        <label>Quantité actuelle *</label>
+        <input id="f-qty" type="number" min="0" placeholder="0">
+      </div>
+      <div class="form-field">
+        <label>Seuil minimum (alerte)</label>
+        <input id="f-min" type="number" min="0" placeholder="Ex: 10">
+      </div>
+      <div class="form-field">
+        <label>DLC</label>
+        <input id="f-dlc" type="date">
+      </div>
+      <div class="form-field">
+        <label>Fournisseur</label>
+        <input id="f-supplier" type="text" placeholder="Ex: Metro...">
+      </div>
+      <div class="form-field">
+        <label>Emplacement</label>
+        <input id="f-location" type="text" placeholder="Ex: Frigo A...">
+      </div>
+      <div class="form-field" style="grid-column:1/-1">
+        <label>Notes</label>
+        <textarea id="f-notes" placeholder="Informations complémentaires..."></textarea>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">Annuler</button>
+      <button class="btn-save" onclick="saveItem()">ENREGISTRER</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal utilisateur -->
+<div id="user-modal-overlay" class="modal-overlay" onclick="closeUserModalBg(event)">
+  <div class="modal">
+    <div class="modal-title" id="user-modal-title">INVITER UN UTILISATEUR</div>
+    <div class="form-grid">
+      <div class="form-field">
+        <label>Prénom / Nom *</label>
+        <input id="u-name" type="text" placeholder="Ex: Yanis Martin">
+      </div>
+      <div class="form-field">
+        <label>Email * (identifiant de connexion)</label>
+        <input id="u-username" type="email" placeholder="yanis@email.com">
+      </div>
+      <div class="form-field">
+        <label>Mot de passe provisoire *</label>
+        <input id="u-password" type="password" placeholder="Min. 6 caractères">
+      </div>
+      <div class="form-field">
+        <label>Rôle</label>
+        <select id="u-role">
+          <option value="Administrateur">Administrateur</option>
+          <option value="Gérant">Gérant</option>
+          <option value="Employé">Employé</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeUserModal()">Annuler</button>
+      <button class="btn-save" onclick="saveUser()">ENREGISTRER</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal restaurant -->
+<div id="resto-modal-overlay" class="modal-overlay" onclick="closeRestoModalBg(event)">
+  <div class="modal">
+    <div class="modal-title" id="resto-modal-title">AJOUTER UN RESTAURANT</div>
+    <div class="form-grid">
+      <div class="form-field" style="grid-column:1/-1">
+        <label>Nom du restaurant *</label>
+        <input id="rm-name" type="text" placeholder="Ex: Tasty République">
+      </div>
+      <div class="form-field" style="grid-column:1/-1">
+        <label>Adresse / Emplacement *</label>
+        <input id="rm-location" type="text" placeholder="Ex: Toulouse Est">
+      </div>
+      <div class="form-field">
+        <label>Couleur d'accent</label>
+        <select id="rm-color">
+          <option value="pink">Rose</option>
+          <option value="green">Vert</option>
+          <option value="blue">Bleu</option>
+          <option value="orange">Orange</option>
+          <option value="yellow">Jaune</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeRestoModal()">Annuler</button>
+      <button class="btn-save" onclick="saveResto()">CRÉER</button>
+    </div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast-wrap"></div>
+
+<!-- SCRIPTS — ordre important -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="supabase.js"></script>
+<script src="app.js"></script>
+<script src="export.js"></script>
+</body>
+</html>
