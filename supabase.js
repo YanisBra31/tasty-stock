@@ -497,6 +497,7 @@ async function sbCreatePosProduct(restoId, product) {
       name:     product.name,
       category: product.category || 'Sans catégorie',
       price:    product.price,
+      tva_rate: product.tvaRate != null ? product.tvaRate : 10,
       options:  product.options || [],
     })
     .select()
@@ -537,6 +538,7 @@ async function sbCreatePosTicket(restoId, ticket) {
       subtotal:      ticket.subtotal,
       discount:      ticket.discount,
       total:         ticket.total,
+      vat_breakdown: ticket.vatBreakdown || [],
       payment_mode:  ticket.paymentMode,
       cash_given:    ticket.cashGiven,
       change:        ticket.change,

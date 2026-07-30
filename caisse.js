@@ -428,10 +428,11 @@ function posOpenProduct(id) {
 
 function posAddToCart(product, selectedOptions) {
   const unitPrice = Number(product.price) + selectedOptions.reduce((s, o) => s + (Number(o.priceDelta) || 0), 0);
+  const tvaRate = product.tva_rate != null ? Number(product.tva_rate) : 10;
   const key = product.id + '::' + selectedOptions.map(o => o.id).sort().join(',');
   const found = _posCart.find(i => i.key === key);
   if (found) { found.qty += 1; }
-  else { _posCart.push({ key, productId: product.id, name: product.name, options: selectedOptions, unitPrice, qty: 1 }); }
+  else { _posCart.push({ key, productId: product.id, name: product.name, options: selectedOptions, unitPrice, tvaRate, qty: 1 }); }
   posRefreshCartPanel();
 }
 function posChangeQty(key, delta) {
@@ -489,6 +490,37 @@ function posDiscountAmount() {
   return Math.min(subtotal, v);
 }
 function posCartTotal() { return Math.max(0, posCartSubtotal() - posDiscountAmount()); }
+
+/** Formate un taux de TVA (10 → "10 %", 5.5 → "5,5 %") */
+function posVatRateLabel(rate) {
+  const r = Number(rate) || 0;
+  return (Number.isInteger(r) ? String(r) : String(r).replace('.', ',')) + ' %';
+}
+/**
+ * Ventile un montant TTC (prix affichés = TTC) par taux de TVA à partir
+ * d'une liste d'articles de panier/ticket ({ unitPrice, qty, tvaRate }).
+ * La remise éventuelle est répartie au prorata entre les taux.
+ */
+function posVatBreakdownFromItems(items, subtotal, total) {
+  const ratio = subtotal > 0 ? total / subtotal : 1;
+  const groups = {};
+  (items || []).forEach(i => {
+    const rate = i.tvaRate != null ? Number(i.tvaRate) : 10;
+    const ttc = i.unitPrice * i.qty * ratio;
+    groups[rate] = (groups[rate] || 0) + ttc;
+  });
+  return Object.keys(groups).map(rate => {
+    const r = Number(rate);
+    const ttc = groups[rate];
+    const ht = r > 0 ? ttc / (1 + r / 100) : ttc;
+    return { rate: r, ttc, ht, tva: ttc - ht };
+  }).sort((a, b) => b.rate - a.rate);
+}
+function posCartVatBreakdown() { return posVatBreakdownFromItems(_posCart, posCartSubtotal(), posCartTotal()); }
+function posVatSummaryLinesHTML(breakdown) {
+  return (breakdown || []).map(b => `
+    <div class="pos-summary-line muted" style="font-size:11px"><span>dont TVA ${posVatRateLabel(b.rate)}</span><span class="mono">${posFmt(b.tva)}</span></div>`).join('');
+}
 function posCashGivenNum() { return posParseNum(_posCashGiven); }
 function posChange() { return _posPaymentMode && _posPaymentMode.requiresCash ? Math.max(0, posCashGivenNum() - posCartTotal()) : 0; }
 function posCanValidate() {
@@ -538,6 +570,7 @@ function posRefreshCartPanel() {
       ${discount > 0 ? `
         <div class="pos-summary-line muted"><span>Sous-total</span><span class="mono">${posFmt(subtotal)}</span></div>
         <div class="pos-summary-line" style="color:var(--red)"><span>Remise</span><span class="mono">-${posFmt(discount)}</span></div>` : ''}
+      <div id="pos-vat-lines">${posVatSummaryLinesHTML(posCartVatBreakdown())}</div>
       <div class="pos-summary-total">
         <span>Total</span>
         <span class="mono" id="pos-cart-total-value">${posFmt(total)}</span>
@@ -595,6 +628,8 @@ function posOnCashGivenInput() {
 function posUpdateCartTotalsInline() {
   const totalEl = document.getElementById('pos-cart-total-value');
   if (totalEl) totalEl.textContent = posFmt(posCartTotal());
+  const vatLines = document.getElementById('pos-vat-lines');
+  if (vatLines) vatLines.innerHTML = posVatSummaryLinesHTML(posCartVatBreakdown());
   const changeLine = document.getElementById('pos-cash-change-line');
   if (changeLine) {
     changeLine.innerHTML = _posCashGiven ? `Rendu à donner : <span style="color:var(--green);font-weight:600">${posFmt(posChange())}</span>` : '';
@@ -613,6 +648,7 @@ async function posValidateTicket() {
     subtotal,
     discount: _posDiscountType ? { type: _posDiscountType, value: posParseNum(_posDiscountValue), amount: discountAmount } : null,
     total,
+    vatBreakdown: posVatBreakdownFromItems(_posCart, subtotal, total),
     paymentMode: _posPaymentMode,
     cashGiven: _posPaymentMode.requiresCash ? posCashGivenNum() : null,
     change: _posPaymentMode.requiresCash ? posChange() : null,
@@ -701,6 +737,14 @@ function posProduitsHTML() {
           <label>Prix (€)</label>
           <input id="pos-new-price" type="text" placeholder="6.50" oninput="this.value=this.value.replace(/[^0-9.,]/g,'')">
         </div>
+        <div class="form-field" style="margin-bottom:12px">
+          <label>TVA</label>
+          <select id="pos-new-tva" class="select-input">
+            <option value="10" selected>10 % (sur place / à emporter)</option>
+            <option value="5.5">5,5 % (produits de 1ère nécessité)</option>
+            <option value="20">20 % (alcool, boissons)</option>
+          </select>
+        </div>
         <div class="form-field" style="margin-bottom:16px">
           <label>Catégorie</label>
           <input id="pos-new-category" type="text" list="pos-cat-list" placeholder="Ex. Sandwichs">
@@ -751,11 +795,12 @@ function posRemoveOptionDraft(id) {
 async function posAddProduct() {
   const name = document.getElementById('pos-new-name').value.trim();
   const price = posParseNum(document.getElementById('pos-new-price').value);
+  const tvaRate = posParseNum(document.getElementById('pos-new-tva').value);
   const category = document.getElementById('pos-new-category').value.trim() || 'Sans catégorie';
   if (!name || price <= 0) { toast('Renseigne un nom et un prix valide.', 'err'); return; }
   setLoading(true);
   try {
-    const product = await sbCreatePosProduct(currentResto, { name, price, category, options: _posPendingOptions });
+    const product = await sbCreatePosProduct(currentResto, { name, price, tvaRate, category, options: _posPendingOptions });
     _posProducts.push(product);
     _posPendingOptions = [];
     document.getElementById('pos-new-name').value = '';
@@ -780,6 +825,7 @@ function posCatalogListHTML() {
           <div>
             <span style="font-size:13.5px;font-weight:500">${esc(p.name)}</span>
             <span class="pos-badge-cat">${esc(p.category)}</span>
+            <span class="pos-badge-cat">TVA ${posVatRateLabel(p.tva_rate)}</span>
           </div>
           <div style="display:flex;align-items:center;gap:12px">
             <span class="mono" style="color:var(--pink);font-weight:600">${posFmt(p.price)}</span>
@@ -953,16 +999,23 @@ function posViewTicket(id) {
 }
 function posExportCSV() {
   if (!_posTickets.length) { toast('Aucune donnée à exporter', 'info'); return; }
-  const header = ['Date', 'Employé', 'Articles', 'SousTotal', 'Remise', 'Total', 'Paiement'];
-  const rows = _posTickets.map(t => ([
-    new Date(t.created_at).toLocaleString('fr-FR'),
-    t.employee_name || '',
-    t.items.map(i => `${i.name}${i.options && i.options.length ? ' (' + i.options.map(o => o.label).join(', ') + ')' : ''} x${i.qty}`).join(' | '),
-    Number(t.subtotal).toFixed(2),
-    t.discount ? Number(t.discount.amount).toFixed(2) : '0.00',
-    Number(t.total).toFixed(2),
-    (t.payment_mode && t.payment_mode.label) || '',
-  ]).map(v => '"' + String(v).replace(/"/g, '""') + '"'));
+  const header = ['Date', 'Employé', 'Articles', 'SousTotal', 'Remise', 'TotalHT', 'TotalTVA', 'Total', 'Paiement'];
+  const rows = _posTickets.map(t => {
+    const vat = posTicketVatBreakdown(t);
+    const totalTva = vat.reduce((s, b) => s + b.tva, 0);
+    const totalHt = Number(t.total) - totalTva;
+    return [
+      new Date(t.created_at).toLocaleString('fr-FR'),
+      t.employee_name || '',
+      t.items.map(i => `${i.name}${i.options && i.options.length ? ' (' + i.options.map(o => o.label).join(', ') + ')' : ''} x${i.qty}`).join(' | '),
+      Number(t.subtotal).toFixed(2),
+      t.discount ? Number(t.discount.amount).toFixed(2) : '0.00',
+      totalHt.toFixed(2),
+      totalTva.toFixed(2),
+      Number(t.total).toFixed(2),
+      (t.payment_mode && t.payment_mode.label) || '',
+    ];
+  }).map(v => v.map(cell => '"' + String(cell).replace(/"/g, '""') + '"'));
   const csv = [header.map(h => '"' + h + '"')].concat(rows).map(r => r.join(',')).join('\n');
   const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
@@ -1171,6 +1224,11 @@ function posCloseModal() {
 // ═══════════════════════════════════════════════════════════
 //  REÇU CLIENT (modal + email)
 // ═══════════════════════════════════════════════════════════
+/** Détail TVA d'un ticket enregistré : utilise vat_breakdown s'il existe, sinon le recalcule (anciens tickets). */
+function posTicketVatBreakdown(ticket) {
+  if (ticket.vat_breakdown && ticket.vat_breakdown.length) return ticket.vat_breakdown;
+  return posVatBreakdownFromItems(ticket.items, Number(ticket.subtotal), Number(ticket.total));
+}
 function posReceiptModalHTML(ticket) {
   const resto = (_restos || []).find(r => r.id === currentResto);
   const shopName = resto ? resto.name : '';
@@ -1197,6 +1255,8 @@ function posReceiptModalHTML(ticket) {
         ${ticket.discount ? `
           <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted2);padding:8px 0 2px"><span>Sous-total</span><span class="mono">${posFmt(ticket.subtotal)}</span></div>
           <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--red);padding:2px 0"><span>Remise</span><span class="mono">-${posFmt(ticket.discount.amount)}</span></div>` : ''}
+        ${posTicketVatBreakdown(ticket).map(b => `
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted2);padding:1px 0"><span>dont TVA ${posVatRateLabel(b.rate)}</span><span class="mono">${posFmt(b.tva)}</span></div>`).join('')}
         <div style="display:flex;justify-content:space-between;padding:12px 0 6px">
           <span style="font-weight:700;font-size:13.5px">Total</span>
           <span class="mono" style="font-weight:700;font-size:16px">${posFmt(ticket.total)}</span>
@@ -1229,6 +1289,7 @@ function posSendReceiptEmail() {
     ...lines, '',
     t.discount ? `Sous-total : ${posFmt(t.subtotal)}` : null,
     t.discount ? `Remise : -${posFmt(t.discount.amount)}` : null,
+    ...posTicketVatBreakdown(t).map(b => `dont TVA ${posVatRateLabel(b.rate)} : ${posFmt(b.tva)}`),
     `Total : ${posFmt(t.total)}`, `Paiement : ${(t.payment_mode && t.payment_mode.label) || ''}`,
   ].filter(v => v !== null).join('\n');
   const mailto = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(`Ticket #${t.number} — ${shopName}`)}&body=${encodeURIComponent(body)}`;
@@ -1250,7 +1311,8 @@ function posPrintReceipt() {
       <div style="border-top:2px dashed #000;margin:8px 0"></div>
       ${t.items.map(i => `<div style="font-size:13px;margin-bottom:4px;display:flex;justify-content:space-between"><span>${i.qty} × ${esc(i.name)}</span><span>${posFmt(i.unitPrice * i.qty)}</span></div>`).join('')}
       <div style="border-top:2px dashed #000;margin:8px 0"></div>
-      <div style="font-size:14px;font-weight:700;display:flex;justify-content:space-between"><span>TOTAL</span><span>${posFmt(t.total)}</span></div>
+      ${posTicketVatBreakdown(t).map(b => `<div style="font-size:11px;display:flex;justify-content:space-between"><span>dont TVA ${posVatRateLabel(b.rate)}</span><span>${posFmt(b.tva)}</span></div>`).join('')}
+      <div style="font-size:14px;font-weight:700;display:flex;justify-content:space-between;margin-top:4px"><span>TOTAL</span><span>${posFmt(t.total)}</span></div>
       <div style="font-size:11px;margin-top:6px">Payé par ${esc((t.payment_mode && t.payment_mode.label) || '—')}</div>
     </div>`;
   posPrint(html);

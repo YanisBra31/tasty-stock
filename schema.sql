@@ -158,10 +158,13 @@ create table if not exists public.pos_products (
   name        text not null,
   category    text not null default 'Sans catégorie',
   price       numeric(10,2) not null default 0,
+  tva_rate    numeric(4,2) not null default 10, -- taux de TVA en % (5.5 / 10 / 20)
   options     jsonb not null default '[]'::jsonb,
   created_at  timestamptz not null default now(),
   updated_at  timestamptz not null default now()
 );
+-- Rétrocompatibilité : ajoute la colonne si la table existait déjà sans TVA
+alter table public.pos_products add column if not exists tva_rate numeric(4,2) not null default 10;
 
 -- ── TABLE : pos_tickets (ventes encaissées) ───────────────
 create table if not exists public.pos_tickets (
@@ -172,6 +175,7 @@ create table if not exists public.pos_tickets (
   subtotal       numeric(10,2) not null default 0,
   discount       jsonb,
   total          numeric(10,2) not null default 0,
+  vat_breakdown  jsonb not null default '[]'::jsonb, -- [{rate, ht, tva, ttc}, ...]
   payment_mode   jsonb,
   cash_given     numeric(10,2),
   change         numeric(10,2),
@@ -179,6 +183,8 @@ create table if not exists public.pos_tickets (
   status         text not null default 'en_attente', -- en_attente | prete
   created_at     timestamptz not null default now()
 );
+-- Rétrocompatibilité : ajoute la colonne si la table existait déjà sans TVA
+alter table public.pos_tickets add column if not exists vat_breakdown jsonb not null default '[]'::jsonb;
 
 -- ── TABLE : pos_settings (1 ligne par restaurant) ─────────
 create table if not exists public.pos_settings (
