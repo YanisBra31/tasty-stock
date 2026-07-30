@@ -55,6 +55,7 @@ let _posConfirmDeleteMode     = null;
 
 let _posHeartbeatInterval  = null;
 let _posOnlinePollInterval = null;
+let _posOrdersPollInterval = null;
 
 let _posChartDays     = null;
 let _posChartPayments = null;
@@ -278,12 +279,15 @@ function posStartPresence() {
   posRefreshOnline();
   if (_posHeartbeatInterval) clearInterval(_posHeartbeatInterval);
   if (_posOnlinePollInterval) clearInterval(_posOnlinePollInterval);
+  if (_posOrdersPollInterval) clearInterval(_posOrdersPollInterval);
   _posHeartbeatInterval  = setInterval(posHeartbeat, 20000);
   _posOnlinePollInterval = setInterval(posRefreshOnline, 15000);
+  _posOrdersPollInterval = setInterval(posPollTickets, 5000);
 }
 function posStopPresence() {
   if (_posHeartbeatInterval) { clearInterval(_posHeartbeatInterval); _posHeartbeatInterval = null; }
   if (_posOnlinePollInterval) { clearInterval(_posOnlinePollInterval); _posOnlinePollInterval = null; }
+  if (_posOrdersPollInterval) { clearInterval(_posOrdersPollInterval); _posOrdersPollInterval = null; }
   if (_posActiveEmployee) { try { sbClearPosPresence(_posActiveEmployee.id); } catch (_) {} }
 }
 async function posHeartbeat() {
@@ -300,6 +304,23 @@ async function posRefreshOnline() {
 function posUpdateOnlineBadge() {
   const el = document.getElementById('pos-online-count');
   if (el) el.textContent = _posOnline.length;
+}
+
+/** Rafraîchit les tickets depuis Supabase (polling) : détecte les nouvelles commandes
+ *  saisies sur un autre poste et met à jour l'onglet Commandes sans rechargement manuel. */
+async function posPollTickets() {
+  if (!_posActiveEmployee || !currentResto) return;
+  try {
+    const fresh = await sbGetPosTickets(currentResto);
+    const knownIds = new Set(_posTickets.map(t => t.id));
+    const arrived = fresh.filter(t => !knownIds.has(t.id) && t.status === 'en_attente');
+    _posTickets = fresh;
+    if (arrived.length) {
+      toast(arrived.length > 1 ? `${arrived.length} nouvelles commandes` : 'Nouvelle commande reçue', 'info');
+    }
+    // Re-rendu systématique : reflète aussi les commandes marquées "prête" depuis un autre poste
+    if (_posTab === 'commandes') posRenderTab();
+  } catch (_) {}
 }
 
 // ═══════════════════════════════════════════════════════════
