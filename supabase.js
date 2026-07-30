@@ -606,3 +606,36 @@ async function sbGetPosOnline(restoId) {
   if (error) throw error;
   return data || [];
 }
+
+// ── Clôtures de caisse (ticket Z) ──────────────────────────
+async function sbGetPosClosures(restoId) {
+  const { data, error } = await sb
+    .from('pos_closures')
+    .select('*')
+    .eq('resto_id', restoId)
+    .order('number', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+async function sbCreatePosClosure(restoId, closure) {
+  const { data, error } = await sb
+    .from('pos_closures')
+    .insert({
+      resto_id:       restoId,
+      number:         closure.number,
+      period_start:   closure.periodStart,
+      period_end:     closure.periodEnd,
+      nb_tickets:     closure.nbTickets,
+      total_ttc:      closure.totalTtc,
+      total_ht:       closure.totalHt,
+      total_discount: closure.totalDiscount,
+      vat_breakdown:  closure.vatBreakdown,
+      by_payment:     closure.byPayment,
+      employee_name:  closure.employeeName,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}

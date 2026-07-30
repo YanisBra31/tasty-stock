@@ -16,6 +16,7 @@ const POS_TABS = [
   { id: 'equipe',     label: 'Équipe',        icon: '👥', roles: ['gerant'] },
   { id: 'historique', label: 'Historique',    icon: '🕓', roles: ['gerant', 'caissier'] },
   { id: 'stats',      label: 'Statistiques',  icon: '📊', roles: ['gerant'] },
+  { id: 'cloture',    label: 'Clôture Z',     icon: '🔒', roles: ['gerant', 'caissier'] },
   { id: 'reglages',   label: 'Réglages',      icon: '⚙️', roles: ['gerant'] },
 ];
 const POS_BILLS = [5, 10, 20, 50];
@@ -30,6 +31,7 @@ let _posProducts       = [];
 let _posTickets        = [];
 let _posSettings       = { autoPrintKitchen: true, paymentModes: DEFAULT_POS_PAYMENT_MODES };
 let _posOnline         = [];
+let _posClosures       = [];
 let _posLoadedResto    = null;
 
 let _posActiveEmployee  = null;
@@ -92,16 +94,18 @@ async function initCaisse() {
   if (_posLoadedResto !== currentResto) {
     root.innerHTML = `<div class="empty-state"><div class="es-icon">🧾</div><p>Chargement de la caisse…</p></div>`;
     try {
-      const [employees, products, tickets, settings] = await Promise.all([
+      const [employees, products, tickets, settings, closures] = await Promise.all([
         sbGetPosEmployees(currentResto),
         sbGetPosProducts(currentResto),
         sbGetPosTickets(currentResto),
         sbGetPosSettings(currentResto),
+        sbGetPosClosures(currentResto),
       ]);
       _posEmployees   = employees;
       _posProducts    = products;
       _posTickets     = tickets;
       _posSettings    = settings;
+      _posClosures    = closures;
       _posLoadedResto = currentResto;
     } catch (err) {
       console.error('initCaisse error:', err);
@@ -127,7 +131,7 @@ function resetCaisseState() {
   _posPaymentMode     = null;
   _posCashGiven       = '';
   _posLoadedResto     = null;
-  _posEmployees = []; _posProducts = []; _posTickets = []; _posOnline = [];
+  _posEmployees = []; _posProducts = []; _posTickets = []; _posOnline = []; _posClosures = [];
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -369,6 +373,7 @@ function posRenderTab() {
     case 'equipe':     content.innerHTML = posEquipeHTML(); break;
     case 'historique': content.innerHTML = posHistoriqueHTML(); break;
     case 'stats':      content.innerHTML = posStatsHTML(); posRenderCharts(); break;
+    case 'cloture':    content.innerHTML = posClotureHTML(); break;
     case 'reglages':   content.innerHTML = posReglagesHTML(); break;
     default:           content.innerHTML = posVenteHTML();
   }
@@ -1045,6 +1050,187 @@ function posExportCSV() {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
   toast('Export CSV téléchargé ✓', 'ok');
+}
+
+// ═══════════════════════════════════════════════════════════
+//  ONGLET CLÔTURE (ticket Z)
+//  Une clôture couvre tous les tickets encaissés depuis la
+//  précédente (ou depuis l'origine s'il n'y en a aucune).
+// ═══════════════════════════════════════════════════════════
+function posPendingPeriodStart() {
+  return _posClosures.length ? new Date(_posClosures[0].period_end) : new Date(0);
+}
+function posPendingTickets() {
+  const start = posPendingPeriodStart();
+  return _posTickets.filter(t => new Date(t.created_at) > start);
+}
+function posComputePeriodStats(tickets) {
+  const nbTickets = tickets.length;
+  const totalTtc = tickets.reduce((s, t) => s + Number(t.total), 0);
+  const totalDiscount = tickets.reduce((s, t) => s + (t.discount ? Number(t.discount.amount) : 0), 0);
+
+  const vatGroups = {};
+  tickets.forEach(t => {
+    posTicketVatBreakdown(t).forEach(b => {
+      if (!vatGroups[b.rate]) vatGroups[b.rate] = { rate: b.rate, ht: 0, tva: 0, ttc: 0 };
+      vatGroups[b.rate].ht += b.ht;
+      vatGroups[b.rate].tva += b.tva;
+      vatGroups[b.rate].ttc += b.ttc;
+    });
+  });
+  const vatBreakdown = Object.values(vatGroups).sort((a, b) => b.rate - a.rate);
+  const totalTva = vatBreakdown.reduce((s, b) => s + b.tva, 0);
+  const totalHt = totalTtc - totalTva;
+
+  const byPaymentMap = {};
+  tickets.forEach(t => {
+    const label = (t.payment_mode && t.payment_mode.label) || 'Autre';
+    if (!byPaymentMap[label]) byPaymentMap[label] = { label, amount: 0, count: 0 };
+    byPaymentMap[label].amount += Number(t.total);
+    byPaymentMap[label].count += 1;
+  });
+  const byPayment = Object.values(byPaymentMap).sort((a, b) => b.amount - a.amount);
+
+  return { nbTickets, totalTtc, totalHt, totalDiscount, vatBreakdown, byPayment };
+}
+
+function posClotureHTML() {
+  const pendingTickets = posPendingTickets();
+  const s = posComputePeriodStats(pendingTickets);
+  const start = posPendingPeriodStart();
+  const nextNumber = (_posClosures[0] ? _posClosures[0].number : 0) + 1;
+  return `
+    <div class="pos-two-col">
+      <div class="pos-form-card">
+        <h3 class="pos-form-title">Clôture en cours — Ticket Z n°${nextNumber}</h3>
+        <p style="font-size:12px;color:var(--muted2);margin:-10px 0 16px">
+          ${_posClosures.length ? `Depuis la dernière clôture du ${start.toLocaleString('fr-FR')}` : "Depuis l'ouverture de la caisse"} — ${s.nbTickets} ticket${s.nbTickets > 1 ? 's' : ''}
+        </p>
+        <div class="kpi-row" style="grid-template-columns:repeat(2,1fr);margin-bottom:16px">
+          <div class="kpi kb"><div class="kpi-label">CA TTC</div><div class="kpi-value" style="font-size:22px">${posFmt(s.totalTtc)}</div></div>
+          <div class="kpi kp"><div class="kpi-label">Tickets</div><div class="kpi-value" style="font-size:22px">${s.nbTickets}</div></div>
+        </div>
+        ${s.byPayment.length ? `
+          <h4 style="font-size:12px;color:var(--muted2);margin-bottom:6px">PAR MODE DE PAIEMENT</h4>
+          <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:16px">
+            ${s.byPayment.map(p => `<div style="display:flex;justify-content:space-between;font-size:13px"><span>${esc(p.label)} <span class="muted">(${p.count})</span></span><span class="mono">${posFmt(p.amount)}</span></div>`).join('')}
+          </div>` : `<p class="muted" style="font-size:12px;margin-bottom:16px">Aucune vente depuis la dernière clôture.</p>`}
+        ${s.vatBreakdown.length ? `
+          <h4 style="font-size:12px;color:var(--muted2);margin-bottom:6px">TVA</h4>
+          <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:16px">
+            ${s.vatBreakdown.map(b => `<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted2)"><span>TVA ${posVatRateLabel(b.rate)} (HT ${posFmt(b.ht)})</span><span class="mono">${posFmt(b.tva)}</span></div>`).join('')}
+          </div>` : ''}
+        ${s.totalDiscount > 0 ? `<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--red);margin-bottom:16px"><span>Remises accordées</span><span class="mono">-${posFmt(s.totalDiscount)}</span></div>` : ''}
+        <button class="btn accent" style="width:100%;justify-content:center;padding:12px" onclick="posConfirmGenerateZ()">🔒 Clôturer et imprimer le ticket Z</button>
+      </div>
+      <div>
+        <h3 class="pos-form-title" id="pos-closures-count">Historique des clôtures (${_posClosures.length})</h3>
+        <div id="pos-closures-list">${posClosuresListHTML()}</div>
+      </div>
+    </div>`;
+}
+
+function posClosuresListHTML() {
+  if (!_posClosures.length) return `<p class="muted" style="font-size:13px">Aucune clôture pour le moment.</p>`;
+  return `<div style="display:flex;flex-direction:column;gap:6px">
+    ${_posClosures.map(c => `
+      <div class="pos-history-row" style="cursor:default">
+        <div>
+          <div style="font-size:13px;font-weight:500">Z n°${c.number} — ${new Date(c.period_end).toLocaleString('fr-FR')}</div>
+          <div class="muted" style="font-size:11.5px">${c.nb_tickets} ticket${c.nb_tickets > 1 ? 's' : ''}${c.employee_name ? ` · ${esc(c.employee_name)}` : ''}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <span class="mono" style="font-size:14px;font-weight:600">${posFmt(c.total_ttc)}</span>
+          <button class="btn-icon" title="Réimprimer le ticket Z" onclick="posReprintClosure('${c.id}')">🖨️</button>
+        </div>
+      </div>`).join('')}
+  </div>`;
+}
+
+function posConfirmGenerateZ() {
+  const s = posComputePeriodStats(posPendingTickets());
+  const nextNumber = (_posClosures[0] ? _posClosures[0].number : 0) + 1;
+  posShowModal(`
+    <div class="modal-overlay open" onclick="if(event.target===this) posCloseModal()">
+      <div class="modal" style="width:340px">
+        <div class="modal-title" style="font-size:18px">Confirmer la clôture Z n°${nextNumber} ?</div>
+        <p style="font-size:13px;color:var(--muted2);margin:8px 0 18px">
+          ${s.nbTickets} ticket${s.nbTickets > 1 ? 's' : ''} pour un total de <b>${posFmt(s.totalTtc)}</b>.
+          Cette clôture sera enregistrée et servira de point de départ pour la suivante.
+        </p>
+        <div style="display:flex;gap:8px">
+          <button class="btn-cancel" style="flex:1;justify-content:center" onclick="posCloseModal()">Annuler</button>
+          <button class="btn accent" style="flex:1;justify-content:center" onclick="posGenerateZReport()">Confirmer</button>
+        </div>
+      </div>
+    </div>`);
+}
+
+async function posGenerateZReport() {
+  const periodStart = posPendingPeriodStart();
+  const periodEnd = new Date();
+  const tickets = posPendingTickets();
+  const s = posComputePeriodStats(tickets);
+  const number = (_posClosures[0] ? _posClosures[0].number : 0) + 1;
+  const draft = {
+    number,
+    periodStart: periodStart.toISOString(),
+    periodEnd: periodEnd.toISOString(),
+    nbTickets: s.nbTickets,
+    totalTtc: s.totalTtc,
+    totalHt: s.totalHt,
+    totalDiscount: s.totalDiscount,
+    vatBreakdown: s.vatBreakdown,
+    byPayment: s.byPayment,
+    employeeName: _posActiveEmployee.name,
+  };
+  posCloseModal();
+  setLoading(true);
+  try {
+    const closure = await sbCreatePosClosure(currentResto, draft);
+    _posClosures = [closure, ..._posClosures];
+    posRenderTab();
+    posPrintZReport(closure);
+    toast('Ticket Z généré ✓', 'ok');
+  } catch (err) {
+    console.error(err);
+    toast('Erreur lors de la génération du ticket Z', 'err');
+  } finally { setLoading(false); }
+}
+
+function posReprintClosure(id) {
+  const c = _posClosures.find(x => x.id === id);
+  if (c) posPrintZReport(c);
+}
+
+function posPrintZReport(closure) {
+  const resto = (_restos || []).find(r => r.id === currentResto);
+  const shopName = resto ? resto.name : '';
+  const vat = closure.vat_breakdown || [];
+  const byPayment = closure.by_payment || [];
+  const html = `
+    <div class="pos-print-receipt">
+      <div style="text-align:center;margin-bottom:10px">
+        <div style="font-size:15px;font-weight:700">${esc(shopName)}</div>
+        <div style="font-size:13px;font-weight:700;margin:4px 0">TICKET Z n°${closure.number}</div>
+        <div style="font-size:11px">Du ${new Date(closure.period_start).toLocaleString('fr-FR')}</div>
+        <div style="font-size:11px">au ${new Date(closure.period_end).toLocaleString('fr-FR')}</div>
+        ${closure.employee_name ? `<div style="font-size:11px">Clôturé par ${esc(closure.employee_name)}</div>` : ''}
+      </div>
+      <div style="border-top:2px dashed #000;margin:8px 0"></div>
+      <div style="font-size:12px;display:flex;justify-content:space-between"><span>Nombre de tickets</span><span>${closure.nb_tickets}</span></div>
+      <div style="border-top:2px dashed #000;margin:8px 0"></div>
+      <div style="font-size:12px;font-weight:700;margin-bottom:4px">PAR MODE DE PAIEMENT</div>
+      ${byPayment.length ? byPayment.map(p => `<div style="font-size:12px;display:flex;justify-content:space-between"><span>${esc(p.label)} (${p.count})</span><span>${posFmt(p.amount)}</span></div>`).join('') : '<div style="font-size:12px">—</div>'}
+      <div style="border-top:2px dashed #000;margin:8px 0"></div>
+      <div style="font-size:12px;font-weight:700;margin-bottom:4px">TVA</div>
+      ${vat.length ? vat.map(b => `<div style="font-size:11px;display:flex;justify-content:space-between"><span>TVA ${posVatRateLabel(b.rate)} (HT ${posFmt(b.ht)})</span><span>${posFmt(b.tva)}</span></div>`).join('') : '<div style="font-size:12px">—</div>'}
+      <div style="border-top:2px dashed #000;margin:8px 0"></div>
+      ${Number(closure.total_discount) > 0 ? `<div style="font-size:12px;display:flex;justify-content:space-between;color:#a00"><span>Remises accordées</span><span>-${posFmt(closure.total_discount)}</span></div>` : ''}
+      <div style="font-size:12px;display:flex;justify-content:space-between"><span>Total HT</span><span>${posFmt(closure.total_ht)}</span></div>
+      <div style="font-size:14px;font-weight:700;display:flex;justify-content:space-between;margin-top:4px"><span>TOTAL TTC</span><span>${posFmt(closure.total_ttc)}</span></div>
+    </div>`;
+  posPrint(html);
 }
 
 // ═══════════════════════════════════════════════════════════

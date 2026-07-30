@@ -207,12 +207,34 @@ create table if not exists public.pos_presence (
   last_seen    timestamptz not null default now()
 );
 
+-- ── TABLE : pos_closures (clôtures de caisse / tickets Z) ─
+-- Une clôture couvre tous les tickets encaissés depuis la clôture
+-- précédente (period_start → period_end), avec le détail des
+-- montants par mode de paiement et par taux de TVA.
+create table if not exists public.pos_closures (
+  id             uuid primary key default gen_random_uuid(),
+  resto_id       uuid not null references public.restaurants(id) on delete cascade,
+  number         integer not null,
+  period_start   timestamptz not null,
+  period_end     timestamptz not null,
+  nb_tickets     integer not null default 0,
+  total_ttc      numeric(10,2) not null default 0,
+  total_ht       numeric(10,2) not null default 0,
+  total_discount numeric(10,2) not null default 0,
+  vat_breakdown  jsonb not null default '[]'::jsonb,
+  by_payment     jsonb not null default '[]'::jsonb,
+  employee_name  text,
+  created_at     timestamptz not null default now()
+);
+
 -- ── INDEX utiles ─────────────────────────────────────────
 create index if not exists idx_pos_employees_resto on public.pos_employees(resto_id);
 create index if not exists idx_pos_products_resto  on public.pos_products(resto_id);
 create index if not exists idx_pos_tickets_resto   on public.pos_tickets(resto_id);
 create index if not exists idx_pos_tickets_created on public.pos_tickets(created_at);
 create index if not exists idx_pos_presence_resto  on public.pos_presence(resto_id);
+create index if not exists idx_pos_closures_resto  on public.pos_closures(resto_id);
+create index if not exists idx_pos_closures_number on public.pos_closures(resto_id, number);
 
 -- ── TRIGGER : updated_at automatique ─────────────────────
 create or replace trigger trg_pos_products_updated
@@ -232,6 +254,7 @@ alter table public.pos_products  enable row level security;
 alter table public.pos_tickets   enable row level security;
 alter table public.pos_settings  enable row level security;
 alter table public.pos_presence  enable row level security;
+alter table public.pos_closures  enable row level security;
 
 create policy "auth_all_pos_employees" on public.pos_employees
   for all using (auth.role() = 'authenticated');
@@ -246,4 +269,7 @@ create policy "auth_all_pos_settings" on public.pos_settings
   for all using (auth.role() = 'authenticated');
 
 create policy "auth_all_pos_presence" on public.pos_presence
+  for all using (auth.role() = 'authenticated');
+
+create policy "auth_all_pos_closures" on public.pos_closures
   for all using (auth.role() = 'authenticated');
