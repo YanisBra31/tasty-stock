@@ -22,6 +22,12 @@
 4. Cliquez **"Run"** (ou Ctrl+Entrée)
 5. Vous devez voir : `Success. No rows returned`
 
+> **Vous avez déjà un projet Supabase existant (mise à jour de l'app) ?**
+> Le fichier `schema.sql` utilise uniquement des instructions `if not exists` / `or replace`,
+> il est donc sans risque de le recoller et de le relancer en entier même si les tables du
+> module Stock existent déjà — seules les nouvelles tables (`pos_employees`, `pos_products`,
+> `pos_tickets`, `pos_settings`, `pos_presence`, section **MODULE CAISSE**) seront créées.
+
 ---
 
 ## ÉTAPE 3 — Récupérer vos clés API
