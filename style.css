@@ -2086,12 +2086,16 @@ td { padding: 10px 14px; font-size: 13px; white-space: nowrap; }
 .pos-option-row.checked { border-color: var(--pink); background: var(--card2); }
 .pos-option-row input { margin-right: 8px; }
 
-/* ── Impression ticket / bon cuisine ── */
+/* ── Impression ticket / bon cuisine (imprimante thermique 58/80mm) ── */
 .pos-print-area { display: none; }
 body.pos-printing > *:not(#pos-print-area) { display: none !important; }
 body.pos-printing #pos-print-area { display: block; }
+@page pos-roll-58 { size: 58mm auto; margin: 2mm; }
+@page pos-roll-80 { size: 80mm auto; margin: 2mm; }
 @media print {
-  body.pos-printing #pos-print-area { color: #000; font-family: 'JetBrains Mono', monospace; width: 280px; margin: 0 auto; }
+  body.pos-printing #pos-print-area { color: #000; font-family: 'JetBrains Mono', monospace; margin: 0 auto; }
+  body.pos-printing #pos-print-area.pos-w58 { page: pos-roll-58; width: 54mm; }
+  body.pos-printing #pos-print-area.pos-w80 { page: pos-roll-80; width: 76mm; }
 }
 
 /* ── Responsive ── */

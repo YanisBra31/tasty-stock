@@ -564,9 +564,10 @@ async function sbGetPosSettings(restoId) {
     .eq('resto_id', restoId)
     .maybeSingle();
   if (error) throw error;
-  if (!data) return { autoPrintKitchen: true, paymentModes: DEFAULT_POS_PAYMENT_MODES };
+  if (!data) return { autoPrintKitchen: true, receiptWidth: 80, paymentModes: DEFAULT_POS_PAYMENT_MODES };
   return {
     autoPrintKitchen: data.auto_print_kitchen,
+    receiptWidth:     data.receipt_width || 80,
     paymentModes:     data.payment_modes && data.payment_modes.length ? data.payment_modes : DEFAULT_POS_PAYMENT_MODES,
   };
 }
@@ -575,6 +576,7 @@ async function sbSavePosSettings(restoId, settings) {
   const { error } = await sb.from('pos_settings').upsert({
     resto_id:           restoId,
     auto_print_kitchen: settings.autoPrintKitchen,
+    receipt_width:      settings.receiptWidth || 80,
     payment_modes:       settings.paymentModes,
   }, { onConflict: 'resto_id' });
   if (error) throw error;

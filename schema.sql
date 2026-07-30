@@ -190,6 +190,7 @@ alter table public.pos_tickets add column if not exists vat_breakdown jsonb not 
 create table if not exists public.pos_settings (
   resto_id            uuid primary key references public.restaurants(id) on delete cascade,
   auto_print_kitchen  boolean not null default true,
+  receipt_width       integer not null default 80, -- largeur du rouleau imprimante thermique (58 ou 80 mm)
   payment_modes       jsonb not null default '[
     {"id":"cb","label":"Carte bleue","type":"card","requiresCash":false},
     {"id":"especes","label":"Espèces","type":"cash","requiresCash":true},
@@ -197,6 +198,8 @@ create table if not exists public.pos_settings (
   ]'::jsonb,
   updated_at          timestamptz not null default now()
 );
+-- Rétrocompatibilité : ajoute la colonne si la table existait déjà sans largeur de rouleau
+alter table public.pos_settings add column if not exists receipt_width integer not null default 80;
 
 -- ── TABLE : pos_presence (équipe de caisse "en ligne") ────
 create table if not exists public.pos_presence (

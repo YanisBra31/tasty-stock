@@ -29,7 +29,7 @@ const POS_AVATAR_COLORS = ['#ff2d78', '#ff8c00', '#00e5a0', '#4d9fff', '#ffd600'
 let _posEmployees      = [];
 let _posProducts       = [];
 let _posTickets        = [];
-let _posSettings       = { autoPrintKitchen: true, paymentModes: DEFAULT_POS_PAYMENT_MODES };
+let _posSettings       = { autoPrintKitchen: true, receiptWidth: 80, paymentModes: DEFAULT_POS_PAYMENT_MODES };
 let _posOnline         = [];
 let _posClosures       = [];
 let _posLoadedResto    = null;
@@ -381,6 +381,12 @@ function posRenderTab() {
 
 async function posToggleAutoPrint() {
   _posSettings = { ..._posSettings, autoPrintKitchen: !_posSettings.autoPrintKitchen };
+  posRender();
+  try { await sbSavePosSettings(currentResto, _posSettings); } catch (_) { toast('Erreur de sauvegarde des réglages', 'err'); }
+}
+async function posSetReceiptWidth(width) {
+  if (_posSettings.receiptWidth === width) return;
+  _posSettings = { ..._posSettings, receiptWidth: width };
   posRender();
   try { await sbSavePosSettings(currentResto, _posSettings); } catch (_) { toast('Erreur de sauvegarde des réglages', 'err'); }
 }
@@ -1371,6 +1377,14 @@ function posReglagesHTML() {
             🍳 Impression automatique ${_posSettings.autoPrintKitchen ? 'activée' : 'désactivée'}
           </button>
         </div>
+        <div style="margin-top:18px;padding-top:18px;border-top:1px dashed var(--border)">
+          <h4 class="pos-form-title" style="font-size:13px">Largeur du ticket (imprimante thermique)</h4>
+          <p style="font-size:11px;color:var(--muted2);margin:-6px 0 8px">Choisis la largeur de rouleau de ton imprimante de caisse.</p>
+          <div style="display:flex;gap:8px">
+            <button class="btn${Number(_posSettings.receiptWidth) === 58 ? ' green-btn' : ''}" style="flex:1;justify-content:center;padding:10px" onclick="posSetReceiptWidth(58)">58 mm</button>
+            <button class="btn${Number(_posSettings.receiptWidth) !== 58 ? ' green-btn' : ''}" style="flex:1;justify-content:center;padding:10px" onclick="posSetReceiptWidth(80)">80 mm</button>
+          </div>
+        </div>
       </div>
       <div>
         <h3 class="pos-form-title" id="pos-mode-count">Modes de paiement (${_posSettings.paymentModes.length})</h3>
@@ -1556,6 +1570,7 @@ function posPrint(html) {
   const area = document.getElementById('pos-print-area');
   if (!area) { window.print(); return; }
   area.innerHTML = html;
+  area.className = 'pos-print-area ' + (Number(_posSettings.receiptWidth) === 58 ? 'pos-w58' : 'pos-w80');
   document.body.classList.add('pos-printing');
   let done = false;
   const cleanup = () => {
