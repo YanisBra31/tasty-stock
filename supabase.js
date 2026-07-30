@@ -348,3 +348,259 @@ async function cachedUsers() {
   if (!_cache.users) _cache.users = await sbGetUsers();
   return _cache.users;
 }
+
+// ═══════════════════════════════════════════════════════════
+//  PRÉSENCE EN LIGNE
+// ═══════════════════════════════════════════════════════════
+
+/** Met à jour la présence de l'utilisateur courant (toutes les 30s) */
+async function sbUpdatePresence(userId, userName, restoId, restoName) {
+  await sb.from('presence').upsert({
+    user_id:    userId,
+    user_name:  userName,
+    last_seen:  new Date().toISOString(),
+    resto_id:   restoId   || null,
+    resto_name: restoName || '',
+  }, { onConflict: 'user_id' });
+}
+
+/** Récupère tous les utilisateurs en ligne (last_seen < 2 minutes) */
+async function sbGetOnlineUsers() {
+  const twoMinAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+  const { data, error } = await sb
+    .from('presence')
+    .select('*')
+    .gte('last_seen', twoMinAgo)
+    .order('last_seen', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+/** Récupère toute la table présence (pour afficher last_seen même hors ligne) */
+async function sbGetAllPresence() {
+  const { data, error } = await sb
+    .from('presence')
+    .select('*')
+    .order('last_seen', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+/** Met à jour last_login du profil */
+async function sbUpdateLastLogin(userId) {
+  await sb.from('profiles').update({ last_login: new Date().toISOString() }).eq('id', userId);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  LOGS D'ACTIVITÉ
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Enregistre une action dans les logs
+ * @param {string} action  - ex: 'login', 'stock.create', 'transfer', 'logout'
+ * @param {string} target  - nom de l'objet concerné (ex: nom du produit)
+ * @param {object} details - infos supplémentaires (optionnel)
+ */
+async function sbLog(action, target, details) {
+  if (!currentUser) return;
+  const restos = typeof _restos !== 'undefined' ? _restos : [];
+  const resto  = restos.find(function(r) { return r.id === currentResto; });
+  try {
+    await sb.from('activity_logs').insert({
+      user_id:    currentUser.id,
+      user_name:  currentUser.name,
+      action:     action,
+      target:     target || '',
+      resto_id:   currentResto   || null,
+      resto_name: resto ? resto.name : '',
+      details:    details || null,
+    });
+  } catch (e) {
+    // Non bloquant — on ignore les erreurs de log
+    console.warn('Log error:', e);
+  }
+}
+
+/** Récupère les logs paginés */
+async function sbGetLogs(page, perPage, filterAction, filterUser) {
+  page    = page    || 1;
+  perPage = perPage || 50;
+  var from = (page - 1) * perPage;
+  var to   = from + perPage - 1;
+
+  var query = sb
+    .from('activity_logs')
+    .select('*', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(from, to);
+
+  if (filterAction && filterAction !== '') query = query.eq('action', filterAction);
+  if (filterUser   && filterUser   !== '') query = query.eq('user_id', filterUser);
+
+  var result = await query;
+  if (result.error) throw result.error;
+  return { data: result.data || [], count: result.count || 0 };
+}
+
+// ═══════════════════════════════════════════════════════════
+//  MODULE CAISSE (POS)
+// ═══════════════════════════════════════════════════════════
+
+const DEFAULT_POS_PAYMENT_MODES = [
+  { id: 'cb',      label: 'Carte bleue',       type: 'card', requiresCash: false },
+  { id: 'especes', label: 'Espèces',           type: 'cash', requiresCash: true  },
+  { id: 'tr',      label: 'Ticket restaurant', type: 'other', requiresCash: false },
+];
+
+// ── Équipe de caisse (PIN) ────────────────────────────────
+async function sbGetPosEmployees(restoId) {
+  const { data, error } = await sb
+    .from('pos_employees')
+    .select('*')
+    .eq('resto_id', restoId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
+async function sbCreatePosEmployee(restoId, name, pin, role) {
+  const { data, error } = await sb
+    .from('pos_employees')
+    .insert({ resto_id: restoId, name, pin, role })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function sbDeletePosEmployee(id) {
+  const { error } = await sb.from('pos_employees').delete().eq('id', id);
+  if (error) throw error;
+}
+
+// ── Produits ───────────────────────────────────────────────
+async function sbGetPosProducts(restoId) {
+  const { data, error } = await sb
+    .from('pos_products')
+    .select('*')
+    .eq('resto_id', restoId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
+async function sbCreatePosProduct(restoId, product) {
+  const { data, error } = await sb
+    .from('pos_products')
+    .insert({
+      resto_id: restoId,
+      name:     product.name,
+      category: product.category || 'Sans catégorie',
+      price:    product.price,
+      options:  product.options || [],
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function sbDeletePosProduct(id) {
+  const { error } = await sb.from('pos_products').delete().eq('id', id);
+  if (error) throw error;
+}
+
+// ── Tickets ───────────────────────────────────────────────
+async function sbGetPosTickets(restoId) {
+  const { data, error } = await sb
+    .from('pos_tickets')
+    .select('*')
+    .eq('resto_id', restoId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+async function sbCreatePosTicket(restoId, ticket) {
+  const { count, error: countErr } = await sb
+    .from('pos_tickets')
+    .select('id', { count: 'exact', head: true })
+    .eq('resto_id', restoId);
+  if (countErr) throw countErr;
+
+  const { data, error } = await sb
+    .from('pos_tickets')
+    .insert({
+      resto_id:      restoId,
+      number:        (count || 0) + 1,
+      items:         ticket.items,
+      subtotal:      ticket.subtotal,
+      discount:      ticket.discount,
+      total:         ticket.total,
+      payment_mode:  ticket.paymentMode,
+      cash_given:    ticket.cashGiven,
+      change:        ticket.change,
+      employee_name: ticket.employeeName,
+      status:        'en_attente',
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+async function sbUpdatePosTicketStatus(id, status) {
+  const { error } = await sb.from('pos_tickets').update({ status }).eq('id', id);
+  if (error) throw error;
+}
+
+// ── Réglages caisse (1 ligne par restaurant) ──────────────
+async function sbGetPosSettings(restoId) {
+  const { data, error } = await sb
+    .from('pos_settings')
+    .select('*')
+    .eq('resto_id', restoId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return { autoPrintKitchen: true, paymentModes: DEFAULT_POS_PAYMENT_MODES };
+  return {
+    autoPrintKitchen: data.auto_print_kitchen,
+    paymentModes:     data.payment_modes && data.payment_modes.length ? data.payment_modes : DEFAULT_POS_PAYMENT_MODES,
+  };
+}
+
+async function sbSavePosSettings(restoId, settings) {
+  const { error } = await sb.from('pos_settings').upsert({
+    resto_id:           restoId,
+    auto_print_kitchen: settings.autoPrintKitchen,
+    payment_modes:       settings.paymentModes,
+  }, { onConflict: 'resto_id' });
+  if (error) throw error;
+}
+
+// ── Présence caisse (équipe "en ligne") ───────────────────
+async function sbUpdatePosPresence(employeeId, restoId, name, role) {
+  const { error } = await sb.from('pos_presence').upsert({
+    employee_id: employeeId,
+    resto_id:    restoId,
+    name:        name,
+    role:        role,
+    last_seen:   new Date().toISOString(),
+  }, { onConflict: 'employee_id' });
+  if (error) throw error;
+}
+
+async function sbClearPosPresence(employeeId) {
+  try { await sb.from('pos_presence').delete().eq('employee_id', employeeId); } catch (e) {}
+}
+
+async function sbGetPosOnline(restoId) {
+  const oneMinAgo = new Date(Date.now() - 60 * 1000).toISOString();
+  const { data, error } = await sb
+    .from('pos_presence')
+    .select('*')
+    .eq('resto_id', restoId)
+    .gte('last_seen', oneMinAgo);
+  if (error) throw error;
+  return data || [];
+}

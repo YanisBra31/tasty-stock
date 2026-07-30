@@ -131,3 +131,113 @@ insert into public.restaurants (name, location, color) values
   ('Tasty Capitole', 'Toulouse Centre', 'pink'),
   ('Tasty Compans',  'Toulouse Nord',   'green');
 */
+
+-- ═══════════════════════════════════════════════════════════
+--  MODULE CAISSE (POS)
+--  Point de vente : produits, ticket, équipe de caisse (PIN),
+--  paramètres de paiement. Rattaché à un restaurant existant.
+-- ═══════════════════════════════════════════════════════════
+
+-- ── TABLE : pos_employees (équipe de caisse, code PIN) ────
+-- Distincte de `profiles` : c'est l'équipe qui encaisse au
+-- comptoir (serveurs, cuisine…), identifiée par un code PIN
+-- à 4 chiffres plutôt qu'un compte Supabase complet.
+create table if not exists public.pos_employees (
+  id          uuid primary key default gen_random_uuid(),
+  resto_id    uuid not null references public.restaurants(id) on delete cascade,
+  name        text not null,
+  pin         text not null,
+  role        text not null default 'caissier', -- gerant | caissier | cuisine
+  created_at  timestamptz not null default now()
+);
+
+-- ── TABLE : pos_products (catalogue caisse) ───────────────
+create table if not exists public.pos_products (
+  id          uuid primary key default gen_random_uuid(),
+  resto_id    uuid not null references public.restaurants(id) on delete cascade,
+  name        text not null,
+  category    text not null default 'Sans catégorie',
+  price       numeric(10,2) not null default 0,
+  options     jsonb not null default '[]'::jsonb,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+-- ── TABLE : pos_tickets (ventes encaissées) ───────────────
+create table if not exists public.pos_tickets (
+  id             uuid primary key default gen_random_uuid(),
+  resto_id       uuid not null references public.restaurants(id) on delete cascade,
+  number         integer not null,
+  items          jsonb not null default '[]'::jsonb,
+  subtotal       numeric(10,2) not null default 0,
+  discount       jsonb,
+  total          numeric(10,2) not null default 0,
+  payment_mode   jsonb,
+  cash_given     numeric(10,2),
+  change         numeric(10,2),
+  employee_name  text,
+  status         text not null default 'en_attente', -- en_attente | prete
+  created_at     timestamptz not null default now()
+);
+
+-- ── TABLE : pos_settings (1 ligne par restaurant) ─────────
+create table if not exists public.pos_settings (
+  resto_id            uuid primary key references public.restaurants(id) on delete cascade,
+  auto_print_kitchen  boolean not null default true,
+  payment_modes       jsonb not null default '[
+    {"id":"cb","label":"Carte bleue","type":"card","requiresCash":false},
+    {"id":"especes","label":"Espèces","type":"cash","requiresCash":true},
+    {"id":"tr","label":"Ticket restaurant","type":"other","requiresCash":false}
+  ]'::jsonb,
+  updated_at          timestamptz not null default now()
+);
+
+-- ── TABLE : pos_presence (équipe de caisse "en ligne") ────
+create table if not exists public.pos_presence (
+  employee_id  uuid primary key,
+  resto_id     uuid not null references public.restaurants(id) on delete cascade,
+  name         text not null,
+  role         text not null,
+  last_seen    timestamptz not null default now()
+);
+
+-- ── INDEX utiles ─────────────────────────────────────────
+create index if not exists idx_pos_employees_resto on public.pos_employees(resto_id);
+create index if not exists idx_pos_products_resto  on public.pos_products(resto_id);
+create index if not exists idx_pos_tickets_resto   on public.pos_tickets(resto_id);
+create index if not exists idx_pos_tickets_created on public.pos_tickets(created_at);
+create index if not exists idx_pos_presence_resto  on public.pos_presence(resto_id);
+
+-- ── TRIGGER : updated_at automatique ─────────────────────
+create or replace trigger trg_pos_products_updated
+  before update on public.pos_products
+  for each row execute function public.set_updated_at();
+
+create or replace trigger trg_pos_settings_updated
+  before update on public.pos_settings
+  for each row execute function public.set_updated_at();
+
+-- ── ROW LEVEL SECURITY (RLS) ──────────────────────────────
+-- Même politique que le reste de l'app : tout utilisateur
+-- TastyStock authentifié peut lire/écrire les données caisse.
+
+alter table public.pos_employees enable row level security;
+alter table public.pos_products  enable row level security;
+alter table public.pos_tickets   enable row level security;
+alter table public.pos_settings  enable row level security;
+alter table public.pos_presence  enable row level security;
+
+create policy "auth_all_pos_employees" on public.pos_employees
+  for all using (auth.role() = 'authenticated');
+
+create policy "auth_all_pos_products" on public.pos_products
+  for all using (auth.role() = 'authenticated');
+
+create policy "auth_all_pos_tickets" on public.pos_tickets
+  for all using (auth.role() = 'authenticated');
+
+create policy "auth_all_pos_settings" on public.pos_settings
+  for all using (auth.role() = 'authenticated');
+
+create policy "auth_all_pos_presence" on public.pos_presence
+  for all using (auth.role() = 'authenticated');
