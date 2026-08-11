@@ -548,8 +548,8 @@ function rowHTML(i, withActions=false) {
   // Actions selon permissions
   let actionsHTML = '';
   if (withActions) {
-    const editBtn   = can('stock.edit')   ? `<button class="btn-icon" onclick="openModal('edit','${i.id}')">✏️</button>` : '';
-    const deleteBtn = can('stock.delete') ? `<button class="btn-icon del" onclick="deleteItem('${i.id}')">🗑</button>` : '';
+    const editBtn   = can('stock.edit')   ? `<button class="btn-icon" aria-label="${'Modifier ' + esc(i.name)}" onclick="openModal('edit','${i.id}')">✏️</button>` : '';
+    const deleteBtn = can('stock.delete') ? `<button class="btn-icon del" aria-label="${'Supprimer ' + esc(i.name)}" onclick="deleteItem('${i.id}')">🗑</button>` : '';
     actionsHTML = `<td><div class="row-actions">${editBtn}${deleteBtn}</div></td>`;
   } else {
     actionsHTML = '<td></td>';

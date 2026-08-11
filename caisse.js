@@ -115,9 +115,9 @@ function renderCart() {
           <div class="cart-item-price mono">${fmtEUR(i.unitPrice)} × ${i.qty}</div>
         </div>
         <div class="cart-item-actions">
-          <button class="cart-qty-btn" onclick="changeCartQty('${i.key}',-1)">−</button>
+          <button class="cart-qty-btn" aria-label="${'Diminuer la quantité de ' + esc(i.name)}" onclick="changeCartQty('${i.key}',-1)">−</button>
           <span class="cart-qty-val mono">${i.qty}</span>
-          <button class="cart-qty-btn" onclick="changeCartQty('${i.key}',1)">+</button>
+          <button class="cart-qty-btn" aria-label="${'Augmenter la quantité de ' + esc(i.name)}" onclick="changeCartQty('${i.key}',1)">+</button>
           <button class="cart-remove-btn" aria-label="Retirer l'article du panier" onclick="removeCartItem('${i.key}')">✕</button>
         </div>
       </div>
