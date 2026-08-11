@@ -443,201 +443,261 @@ async function sbGetLogs(page, perPage, filterAction, filterUser) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  MODULE CAISSE (POS)
+//  CAISSE — PRODUITS
 // ═══════════════════════════════════════════════════════════
 
-const DEFAULT_POS_PAYMENT_MODES = [
-  { id: 'cb',      label: 'Carte bleue',       type: 'card', requiresCash: false },
-  { id: 'especes', label: 'Espèces',           type: 'cash', requiresCash: true  },
-  { id: 'tr',      label: 'Ticket restaurant', type: 'other', requiresCash: false },
-];
-
-// ── Équipe de caisse (PIN) ────────────────────────────────
-async function sbGetPosEmployees(restoId) {
-  const { data, error } = await sb
-    .from('pos_employees')
-    .select('*')
-    .eq('resto_id', restoId)
-    .order('created_at', { ascending: true });
-  if (error) throw error;
-  return data;
-}
-
-async function sbCreatePosEmployee(restoId, name, pin, role) {
-  const { data, error } = await sb
-    .from('pos_employees')
-    .insert({ resto_id: restoId, name, pin, role })
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
-
-async function sbDeletePosEmployee(id) {
-  const { error } = await sb.from('pos_employees').delete().eq('id', id);
-  if (error) throw error;
-}
-
-// ── Produits ───────────────────────────────────────────────
-async function sbGetPosProducts(restoId) {
-  const { data, error } = await sb
-    .from('pos_products')
-    .select('*')
-    .eq('resto_id', restoId)
-    .order('created_at', { ascending: true });
-  if (error) throw error;
-  return data;
-}
-
-async function sbCreatePosProduct(restoId, product) {
-  const { data, error } = await sb
-    .from('pos_products')
-    .insert({
-      resto_id: restoId,
-      name:     product.name,
-      category: product.category || 'Sans catégorie',
-      price:    product.price,
-      tva_rate: product.tvaRate != null ? product.tvaRate : 10,
-      options:  product.options || [],
-    })
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
-
-async function sbDeletePosProduct(id) {
-  const { error } = await sb.from('pos_products').delete().eq('id', id);
-  if (error) throw error;
-}
-
-// ── Tickets ───────────────────────────────────────────────
-async function sbGetPosTickets(restoId) {
-  const { data, error } = await sb
-    .from('pos_tickets')
-    .select('*')
-    .eq('resto_id', restoId)
-    .order('created_at', { ascending: false });
-  if (error) throw error;
-  return data;
-}
-
-async function sbCreatePosTicket(restoId, ticket) {
-  const { count, error: countErr } = await sb
-    .from('pos_tickets')
-    .select('id', { count: 'exact', head: true })
-    .eq('resto_id', restoId);
-  if (countErr) throw countErr;
-
-  const { data, error } = await sb
-    .from('pos_tickets')
-    .insert({
-      resto_id:      restoId,
-      number:        (count || 0) + 1,
-      items:         ticket.items,
-      subtotal:      ticket.subtotal,
-      discount:      ticket.discount,
-      total:         ticket.total,
-      vat_breakdown: ticket.vatBreakdown || [],
-      payment_mode:  ticket.paymentMode,
-      cash_given:    ticket.cashGiven,
-      change:        ticket.change,
-      employee_name: ticket.employeeName,
-      status:        'en_attente',
-    })
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
-}
-
-async function sbUpdatePosTicketStatus(id, status) {
-  const { error } = await sb.from('pos_tickets').update({ status }).eq('id', id);
-  if (error) throw error;
-}
-
-// ── Réglages caisse (1 ligne par restaurant) ──────────────
-async function sbGetPosSettings(restoId) {
-  const { data, error } = await sb
-    .from('pos_settings')
-    .select('*')
-    .eq('resto_id', restoId)
-    .maybeSingle();
-  if (error) throw error;
-  if (!data) return { autoPrintKitchen: true, receiptWidth: 80, paymentModes: DEFAULT_POS_PAYMENT_MODES };
+function normalizeCaisseProduct(row) {
   return {
-    autoPrintKitchen: data.auto_print_kitchen,
-    receiptWidth:     data.receipt_width || 80,
-    paymentModes:     data.payment_modes && data.payment_modes.length ? data.payment_modes : DEFAULT_POS_PAYMENT_MODES,
+    id:               row.id,
+    restoId:          row.resto_id,
+    name:             row.name,
+    price:            Number(row.price),
+    category:         row.category,
+    options:          (row.options || []).map(o => ({ id: o.id, label: o.label, priceDelta: Number(o.price_delta) || 0 })),
+    stockItemId:      row.stock_item_id || null,
+    stockQtyPerUnit:  row.stock_qty_per_unit ?? 1,
+    createdAt:        row.created_at,
   };
 }
 
-async function sbSavePosSettings(restoId, settings) {
-  const { error } = await sb.from('pos_settings').upsert({
-    resto_id:           restoId,
-    auto_print_kitchen: settings.autoPrintKitchen,
-    receipt_width:      settings.receiptWidth || 80,
-    payment_modes:       settings.paymentModes,
-  }, { onConflict: 'resto_id' });
-  if (error) throw error;
-}
-
-// ── Présence caisse (équipe "en ligne") ───────────────────
-async function sbUpdatePosPresence(employeeId, restoId, name, role) {
-  const { error } = await sb.from('pos_presence').upsert({
-    employee_id: employeeId,
-    resto_id:    restoId,
-    name:        name,
-    role:        role,
-    last_seen:   new Date().toISOString(),
-  }, { onConflict: 'employee_id' });
-  if (error) throw error;
-}
-
-async function sbClearPosPresence(employeeId) {
-  try { await sb.from('pos_presence').delete().eq('employee_id', employeeId); } catch (e) {}
-}
-
-async function sbGetPosOnline(restoId) {
-  const oneMinAgo = new Date(Date.now() - 60 * 1000).toISOString();
+async function sbGetCaisseProducts(restoId) {
   const { data, error } = await sb
-    .from('pos_presence')
+    .from('caisse_products')
     .select('*')
     .eq('resto_id', restoId)
-    .gte('last_seen', oneMinAgo);
+    .order('name', { ascending: true });
   if (error) throw error;
-  return data || [];
+  return data.map(normalizeCaisseProduct);
 }
 
-// ── Clôtures de caisse (ticket Z) ──────────────────────────
-async function sbGetPosClosures(restoId) {
+async function sbCreateCaisseProduct(restoId, product) {
+  const row = {
+    resto_id:            restoId,
+    name:                product.name,
+    price:               Number(product.price) || 0,
+    category:            product.category || 'Sans catégorie',
+    options:             (product.options || []).map(o => ({ id: o.id, label: o.label, price_delta: o.priceDelta || 0 })),
+    stock_item_id:       product.stockItemId || null,
+    stock_qty_per_unit:  product.stockQtyPerUnit || 1,
+  };
+  const { data, error } = await sb.from('caisse_products').insert(row).select().single();
+  if (error) throw error;
+  return normalizeCaisseProduct(data);
+}
+
+async function sbDeleteCaisseProduct(id) {
+  const { error } = await sb.from('caisse_products').delete().eq('id', id);
+  if (error) throw error;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  CAISSE — MODES DE PAIEMENT
+// ═══════════════════════════════════════════════════════════
+
+function normalizePaymentMode(row) {
+  return { id: row.id, restoId: row.resto_id, label: row.label, type: row.type, requiresCash: !!row.requires_cash };
+}
+
+async function sbGetPaymentModes(restoId) {
   const { data, error } = await sb
-    .from('pos_closures')
+    .from('caisse_payment_modes')
     .select('*')
     .eq('resto_id', restoId)
-    .order('number', { ascending: false });
+    .order('created_at', { ascending: true });
   if (error) throw error;
-  return data || [];
+  return data.map(normalizePaymentMode);
 }
 
-async function sbCreatePosClosure(restoId, closure) {
-  const { data, error } = await sb
-    .from('pos_closures')
-    .insert({
-      resto_id:       restoId,
-      number:         closure.number,
-      period_start:   closure.periodStart,
-      period_end:     closure.periodEnd,
-      nb_tickets:     closure.nbTickets,
-      total_ttc:      closure.totalTtc,
-      total_ht:       closure.totalHt,
-      total_discount: closure.totalDiscount,
-      vat_breakdown:  closure.vatBreakdown,
-      by_payment:     closure.byPayment,
-      employee_name:  closure.employeeName,
-    })
-    .select()
-    .single();
+async function sbCreatePaymentMode(restoId, mode) {
+  const row = {
+    resto_id:      restoId,
+    label:         mode.label,
+    type:          mode.type || 'other',
+    requires_cash: mode.type === 'cash',
+  };
+  const { data, error } = await sb.from('caisse_payment_modes').insert(row).select().single();
   if (error) throw error;
-  return data;
+  return normalizePaymentMode(data);
+}
+
+async function sbDeletePaymentMode(id) {
+  const { error } = await sb.from('caisse_payment_modes').delete().eq('id', id);
+  if (error) throw error;
+}
+
+// ═══════════════════════════════════════════════════════════
+//  CAISSE — TICKETS
+// ═══════════════════════════════════════════════════════════
+
+function normalizeTicket(row) {
+  return {
+    id:              row.id,
+    restoId:         row.resto_id,
+    number:          row.number,
+    items:           row.items || [],
+    subtotal:        Number(row.subtotal),
+    discount:        row.discount || null,
+    total:           Number(row.total),
+    paymentMode:     row.payment_mode,
+    cashGiven:       row.cash_given !== null ? Number(row.cash_given) : null,
+    change:          row.change_given !== null ? Number(row.change_given) : null,
+    status:          row.status,
+    statusUpdatedAt: row.status_updated_at,
+    employeeId:      row.employee_id,
+    employeeName:    row.employee_name,
+    dateISO:         row.created_at,
+    // Chaîne d'inaltérabilité (base NF525/ISCA) — lecture seule,
+    // calculée côté base par un trigger, jamais par le client.
+    type:            row.type || 'vente',
+    cancelsTicketId: row.cancels_ticket_id || null,
+    hash:            row.hash,
+    prevHash:        row.prev_hash,
+  };
+}
+
+/** Tickets des N derniers jours (par défaut 90) pour l'historique + stats */
+async function sbGetTickets(restoId, sinceDays) {
+  const since = new Date();
+  since.setDate(since.getDate() - (sinceDays || 90));
+  const { data, error } = await sb
+    .from('caisse_tickets')
+    .select('*')
+    .eq('resto_id', restoId)
+    .gte('created_at', since.toISOString())
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data.map(normalizeTicket);
+}
+
+/**
+ * Crée un ticket de vente.
+ * Le numéro, l'empreinte (hash) et le chaînage sont calculés par
+ * la base (trigger BEFORE INSERT) — jamais côté client, pour que
+ * l'inaltérabilité tienne même si le front est modifié ou contourné.
+ * Ne PAS envoyer `number`, `hash` ou `prev_hash` : ils sont ignorés
+ * de toute façon si envoyés, la base fait foi.
+ */
+async function sbCreateTicket(restoId, ticket) {
+  const row = {
+    resto_id:      restoId,
+    items:         ticket.items,
+    subtotal:      ticket.subtotal,
+    discount:      ticket.discount,
+    total:         ticket.total,
+    payment_mode:  ticket.paymentMode,
+    cash_given:    ticket.cashGiven,
+    change_given:  ticket.change,
+    status:        'en_attente',
+    employee_id:   ticket.employeeId || null,
+    employee_name: ticket.employeeName || null,
+    type:          'vente',
+  };
+  const { data, error } = await sb.from('caisse_tickets').insert(row).select().single();
+  if (error) throw error;
+  return normalizeTicket(data);
+}
+
+/** Seul champ qu'il reste possible de modifier après validation : le statut cuisine. */
+async function sbUpdateTicketStatus(id, status) {
+  const { data, error } = await sb.from('caisse_tickets').update({ status }).eq('id', id).select().single();
+  if (error) throw error;
+  return normalizeTicket(data);
+}
+
+/**
+ * Annule un ticket déjà encaissé — SANS jamais le modifier ni le
+ * supprimer (impossible de toute façon : la base le refuse).
+ * On insère à la place un ticket de type "annulation", qui référence
+ * le ticket d'origine et porte les montants en négatif : c'est
+ * l'équivalent d'un avoir, et il rentre dans la même chaîne inaltérable.
+ */
+async function sbCancelTicket(restoId, originalTicket, employee) {
+  const row = {
+    resto_id:          restoId,
+    items:             originalTicket.items,
+    subtotal:          -originalTicket.subtotal,
+    discount:          originalTicket.discount,
+    total:             -originalTicket.total,
+    payment_mode:      originalTicket.paymentMode,
+    cash_given:        null,
+    change_given:      null,
+    status:            'prete',
+    employee_id:       employee?.id || null,
+    employee_name:     employee?.name || null,
+    type:              'annulation',
+    cancels_ticket_id: originalTicket.id,
+  };
+  const { data, error } = await sb.from('caisse_tickets').insert(row).select().single();
+  if (error) throw error;
+  return normalizeTicket(data);
+}
+
+// ── Clôtures de caisse (Z) — archivage NF525 ────────────────
+function normalizeClosure(row) {
+  return {
+    id:                 row.id,
+    periodDate:         row.period_date,
+    ticketCount:        row.ticket_count,
+    cancellationCount:  row.cancellation_count,
+    firstTicketNumber:  row.first_ticket_number,
+    lastTicketNumber:   row.last_ticket_number,
+    lastTicketHash:     row.last_ticket_hash,
+    totalVentes:        Number(row.total_ventes),
+    totalAnnulations:   Number(row.total_annulations),
+    totalNet:           Number(row.total_net),
+    byPaymentMode:      row.by_payment_mode || {},
+    grandTotalBefore:   Number(row.grand_total_before),
+    grandTotalAfter:    Number(row.grand_total_after),
+    closedByName:       row.closed_by_name,
+    hash:               row.hash,
+    prevHash:           row.prev_hash,
+    createdAtISO:       row.created_at,
+  };
+}
+
+/** Historique des clôtures déjà émises pour ce restaurant (les plus récentes d'abord). */
+async function sbGetClosures(restoId) {
+  const { data, error } = await sb
+    .from('caisse_closures')
+    .select('*')
+    .eq('resto_id', restoId)
+    .order('period_date', { ascending: false });
+  if (error) throw error;
+  return data.map(normalizeClosure);
+}
+
+/**
+ * Clôture une journée : tous les totaux sont recalculés par la base à
+ * partir des tickets réels (trigger BEFORE INSERT) — le client ne fournit
+ * que la date et qui clôture. Impossible de clôturer deux fois le même jour,
+ * impossible de modifier ou supprimer une clôture existante ensuite.
+ */
+async function sbCreateClosure(restoId, periodDate, employee) {
+  const row = {
+    resto_id:       restoId,
+    period_date:    periodDate, // 'YYYY-MM-DD'
+    closed_by_id:   employee?.id || null,
+    closed_by_name: employee?.name || null,
+  };
+  const { data, error } = await sb.from('caisse_closures').insert(row).select().single();
+  if (error) throw error;
+  return normalizeClosure(data);
+}
+
+
+const _caisseCache = { products: {}, modes: {} };
+
+function invalidateCaisseCache(restoId) {
+  if (restoId) { delete _caisseCache.products[restoId]; delete _caisseCache.modes[restoId]; }
+  else { _caisseCache.products = {}; _caisseCache.modes = {}; }
+}
+
+async function cachedCaisseProducts(restoId) {
+  if (!_caisseCache.products[restoId]) _caisseCache.products[restoId] = await sbGetCaisseProducts(restoId);
+  return _caisseCache.products[restoId];
+}
+
+async function cachedPaymentModes(restoId) {
+  if (!_caisseCache.modes[restoId]) _caisseCache.modes[restoId] = await sbGetPaymentModes(restoId);
+  return _caisseCache.modes[restoId];
 }

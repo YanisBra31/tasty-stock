@@ -15,23 +15,28 @@ const PERMISSIONS = {
     'dashboard.view', 'stock.view', 'alertes.view',
     'transferts.view', 'comparaison.view',
     'utilisateurs.view', 'restaurants.view',
-    'profil.view', 'caisse.view',
+    'profil.view',
+    'caisse.view', 'caisse.commandes.view', 'caisse.historique.view',
+    'caisse.stats.view', 'caisse.produits.manage', 'caisse.cloture',
   ],
   Gérant: [
-    'profil.view', 'caisse.view',
+    'profil.view',
     'stock.create', 'stock.edit', 'stock.delete',
     'transfer.create',
     'restaurant.edit',
     'export.csv', 'export.pdf',
     'dashboard.view', 'stock.view', 'alertes.view',
     'transferts.view', 'comparaison.view',
+    'caisse.view', 'caisse.commandes.view', 'caisse.historique.view',
+    'caisse.stats.view', 'caisse.produits.manage', 'caisse.cloture',
   ],
   Employé: [
-    'profil.view', 'caisse.view',
+    'profil.view',
     'stock.edit',
     'export.csv', 'export.pdf',
     'dashboard.view', 'stock.view', 'alertes.view',
     'comparaison.view',
+    'caisse.view', 'caisse.commandes.view', 'caisse.historique.view',
   ],
 };
 
@@ -56,6 +61,7 @@ function guard(permission, action) {
       'user.create':       'Seul un administrateur peut inviter des utilisateurs.',
       'user.edit':         'Vous n\'avez pas la permission de modifier des utilisateurs.',
       'user.delete':       'Vous n\'avez pas la permission de supprimer des utilisateurs.',
+      'caisse.cloture':    'Seuls un gérant ou un administrateur peuvent clôturer la caisse.',
     };
     toast(msgs[permission] || 'Action non autorisée pour votre rôle.', 'err');
     return false;
@@ -136,11 +142,16 @@ function applyPerm(selector, permission) {
 function applySidebarPermissions() {
   // Pages accessibles selon rôle
   const navMap = {
-    'transferts':   'transferts.view',
-    'utilisateurs': 'utilisateurs.view',
-    'logs':         'utilisateurs.view',
-    'restaurants':  'restaurants.view',
+    'transferts':        'transferts.view',
+    'utilisateurs':      'utilisateurs.view',
+    'logs':              'utilisateurs.view',
+    'restaurants':       'restaurants.view',
     // profil: visible à tous — pas de restriction
+    'caisse':            'caisse.view',
+    'caisse-commandes':  'caisse.commandes.view',
+    'caisse-produits':   'caisse.produits.manage',
+    'caisse-historique': 'caisse.historique.view',
+    'caisse-stats':      'caisse.stats.view',
   };
   document.querySelectorAll('.nav-item[data-page]').forEach(el => {
     const page = el.getAttribute('data-page');
@@ -242,7 +253,6 @@ async function doLogout() {
   setLoading(true);
   try { await sbLog('logout', '', null); } catch(_) {}
   stopPresence();
-  try { resetCaisseState(); } catch (_) {}
   try { await sbLogout(); } catch (_) {}
   currentUser = null; currentResto = null;
   _restos = []; _stock = []; _transfers = []; _users = [];
@@ -324,7 +334,6 @@ async function openResto(id) {
   applySidebarPermissions();
   populateTransferSelects();
   try { startPresence(); } catch (_) {}
-  try { resetCaisseState(); } catch (_) {}
   showScreen('s-app');
   showPage('dashboard', document.querySelector('[data-page="dashboard"]'));
   refreshAll();
@@ -348,7 +357,11 @@ function showPage(name, el) {
     logs:         'utilisateurs.view',
     restaurants:  'restaurants.view',
     profil:       'profil.view',
-    caisse:       'caisse.view',
+    'caisse':            'caisse.view',
+    'caisse-commandes':  'caisse.commandes.view',
+    'caisse-produits':   'caisse.produits.manage',
+    'caisse-historique': 'caisse.historique.view',
+    'caisse-stats':      'caisse.stats.view',
   };
   if (pagePerms[name] && !can(pagePerms[name])) {
     toast('Accès non autorisé pour votre rôle.', 'err');
@@ -371,7 +384,11 @@ function showPage(name, el) {
     case 'profil':       initProfil(); break;
     case 'mentions':     renderMentions(); break;
     case 'restaurants':  initRestosAdmin(); break;
-    case 'caisse':       initCaisse(); break;
+    case 'caisse':            initCaisse(); break;
+    case 'caisse-commandes':  initCaisseCommandes(); break;
+    case 'caisse-produits':   initCaisseProduits(); break;
+    case 'caisse-historique': initCaisseHistorique(); break;
+    case 'caisse-stats':      initCaisseStats(); break;
   }
 }
 
