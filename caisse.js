@@ -1,1588 +1,804 @@
 /* ═══════════════════════════════════════════════════════════
    TASTY STOCK — caisse.js
-   Module Point de Vente (POS) : produits, panier, encaissement,
-   commandes cuisine, équipe de caisse (PIN), historique, stats.
-   Rattaché au restaurant sélectionné (currentResto).
+   Module Encaissement — branché sur Supabase (caisse_products,
+   caisse_payment_modes, caisse_tickets) et sur les comptes /
+   rôles / présence déjà existants de l'app (currentUser,
+   currentResto, can/guard, toast, sbLog...).
 ═══════════════════════════════════════════════════════════ */
 
-// ═══════════════════════════════════════════════════════════
-//  CONSTANTES
-// ═══════════════════════════════════════════════════════════
-const POS_ROLES = { gerant: 'Gérant', caissier: 'Caissier', cuisine: 'Cuisine' };
-const POS_TABS = [
-  { id: 'vente',      label: 'Caisse',        icon: '💳', roles: ['gerant', 'caissier'] },
-  { id: 'commandes',  label: 'Commandes',     icon: '🍳', roles: ['gerant', 'caissier', 'cuisine'] },
-  { id: 'produits',   label: 'Produits',      icon: '📦', roles: ['gerant'] },
-  { id: 'equipe',     label: 'Équipe',        icon: '👥', roles: ['gerant'] },
-  { id: 'historique', label: 'Historique',    icon: '🕓', roles: ['gerant', 'caissier'] },
-  { id: 'stats',      label: 'Statistiques',  icon: '📊', roles: ['gerant'] },
-  { id: 'cloture',    label: 'Clôture Z',     icon: '🔒', roles: ['gerant', 'caissier'] },
-  { id: 'reglages',   label: 'Réglages',      icon: '⚙️', roles: ['gerant'] },
-];
-const POS_BILLS = [5, 10, 20, 50];
-const POS_PAY_ICON = { card: '💳', cash: '💶', other: '🎟️' };
-const POS_AVATAR_COLORS = ['#ff2d78', '#ff8c00', '#00e5a0', '#4d9fff', '#ffd600', '#a78bfa'];
+let _caisseProducts       = [];
+let _paymentModes         = [];
+let _tickets              = [];
+let _closures              = [];
+let _cart                 = [];
+let _caissePaymentMode    = null;
+let _caisseCategory       = 'Tous';
+let _caisseLoadedForResto = null;
 
-// ═══════════════════════════════════════════════════════════
-//  ÉTAT
-// ═══════════════════════════════════════════════════════════
-let _posEmployees      = [];
-let _posProducts       = [];
-let _posTickets        = [];
-let _posSettings       = { autoPrintKitchen: true, receiptWidth: 80, paymentModes: DEFAULT_POS_PAYMENT_MODES };
-let _posOnline         = [];
-let _posClosures       = [];
-let _posLoadedResto    = null;
+let _pendingProductOptions = [];
+let _optionsModalProduct   = null;
+let _optionsModalSelected  = new Set();
+let _viewingTicket         = null;
 
-let _posActiveEmployee  = null;
-let _posPendingEmployee = null;
-let _posPinInput        = '';
-let _posPinError        = '';
-let _posTab              = 'vente';
-
-let _posCart            = [];
-let _posActiveCategory  = 'Tous';
-let _posDiscountType    = null;
-let _posDiscountValue   = '';
-let _posPaymentMode     = null;
-let _posCashGiven       = '';
-
-let _posOptionsModalProduct = null;
-let _posSelectedOptionIds   = new Set();
-let _posPendingOptions      = [];
-
-let _posConfirmDeleteProduct  = null;
-let _posConfirmDeleteEmployee = null;
-let _posConfirmDeleteMode     = null;
-
-let _posHeartbeatInterval  = null;
-let _posOnlinePollInterval = null;
-let _posOrdersPollInterval = null;
-
-let _posChartDays     = null;
-let _posChartPayments = null;
-let _posOpenReceiptTicket = null;
-
-// ═══════════════════════════════════════════════════════════
-//  HELPERS PURS
-// ═══════════════════════════════════════════════════════════
-function posFmt(n) { return (Number(n) || 0).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' }); }
-function posUid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
-function posTodayKey(d) { return (d || new Date()).toLocaleDateString('fr-FR'); }
-function posShortDate(d) { return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }); }
-function posElapsed(iso) {
+function fmtEUR(n) { return (Number(n) || 0).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' }); }
+function isToday(iso) { return new Date(iso).toDateString() === new Date().toDateString(); }
+function timeAgo(iso) {
   const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
   if (mins < 1) return "à l'instant";
   if (mins < 60) return `il y a ${mins} min`;
-  return `il y a ${Math.floor(mins / 60)} h ${mins % 60}`;
+  return `il y a ${Math.floor(mins / 60)} h${mins % 60 ? ' ' + (mins % 60) : ''}`;
 }
-function posAvatarColor(name) {
-  const sum = [...String(name)].reduce((s, c) => s + c.charCodeAt(0), 0);
-  return POS_AVATAR_COLORS[sum % POS_AVATAR_COLORS.length];
-}
-function posInitials(name) { return String(name || '?').trim().slice(0, 2).toUpperCase(); }
-function posParseNum(v) { return parseFloat(String(v || '0').replace(',', '.')) || 0; }
 
 // ═══════════════════════════════════════════════════════════
-//  ENTRÉE / SORTIE DU MODULE
+//  ENCAISSEMENT
 // ═══════════════════════════════════════════════════════════
 async function initCaisse() {
   if (!currentResto) return;
-  const root = document.getElementById('caisse-root');
-  if (!root) return;
+  if (_caisseLoadedForResto !== currentResto) { _cart = []; _caissePaymentMode = null; _caisseLoadedForResto = currentResto; }
 
-  if (_posLoadedResto !== currentResto) {
-    root.innerHTML = `<div class="empty-state"><div class="es-icon">🧾</div><p>Chargement de la caisse…</p></div>`;
-    try {
-      const [employees, products, tickets, settings, closures] = await Promise.all([
-        sbGetPosEmployees(currentResto),
-        sbGetPosProducts(currentResto),
-        sbGetPosTickets(currentResto),
-        sbGetPosSettings(currentResto),
-        sbGetPosClosures(currentResto),
-      ]);
-      _posEmployees   = employees;
-      _posProducts    = products;
-      _posTickets     = tickets;
-      _posSettings    = settings;
-      _posClosures    = closures;
-      _posLoadedResto = currentResto;
-    } catch (err) {
-      console.error('initCaisse error:', err);
-      root.innerHTML = `<div class="empty-state"><div class="es-icon">⚠️</div><p>Erreur de chargement de la caisse. Vérifiez que les tables POS existent (voir schema.sql).</p></div>`;
-      return;
-    }
-  }
-  posRender();
-}
+  const r = _restos.find(x => x.id === currentResto);
+  document.getElementById('caisse-resto-label').textContent = r ? r.name : '';
 
-/** Réinitialise la session caisse (changement de restaurant / déconnexion) */
-function resetCaisseState() {
-  posStopPresence();
-  _posActiveEmployee  = null;
-  _posPendingEmployee = null;
-  _posPinInput        = '';
-  _posPinError        = '';
-  _posTab             = 'vente';
-  _posCart            = [];
-  _posActiveCategory  = 'Tous';
-  _posDiscountType    = null;
-  _posDiscountValue   = '';
-  _posPaymentMode     = null;
-  _posCashGiven       = '';
-  _posLoadedResto     = null;
-  _posEmployees = []; _posProducts = []; _posTickets = []; _posOnline = []; _posClosures = [];
-}
-
-// ═══════════════════════════════════════════════════════════
-//  RENDU PRINCIPAL (dispatch)
-// ═══════════════════════════════════════════════════════════
-function posRender() {
-  const root = document.getElementById('caisse-root');
-  if (!root) return;
-  if (!_posEmployees.length) { root.innerHTML = posSetupHTML(); return; }
-  if (!_posActiveEmployee)   { root.innerHTML = posLockHTML(); return; }
-  root.innerHTML = posShellHTML();
-  posRenderTab();
-}
-
-// ═══════════════════════════════════════════════════════════
-//  ÉCRAN DE CONFIGURATION INITIALE
-// ═══════════════════════════════════════════════════════════
-function posSetupHTML() {
-  return `
-    <div class="pos-center-wrap">
-      <div class="pos-setup-card">
-        <div class="pos-setup-title">🧾 Configurer la caisse</div>
-        <p class="pos-setup-sub">Crée le premier compte de l'équipe caisse (Gérant) pour ce restaurant. Chaque employé pourra ensuite se connecter avec son propre code PIN.</p>
-        <div class="form-field" style="margin-bottom:12px">
-          <label>Ton nom</label>
-          <input id="pos-setup-name" type="text" placeholder="Ex. Léa" autocomplete="off">
-        </div>
-        <div class="form-field" style="margin-bottom:18px">
-          <label>Code PIN (4 chiffres)</label>
-          <input id="pos-setup-pin" type="password" inputmode="numeric" placeholder="1234" maxlength="4"
-                 oninput="this.value=this.value.replace(/\\D/g,'').slice(0,4)" style="letter-spacing:6px">
-        </div>
-        <button class="btn accent" style="width:100%;justify-content:center;padding:12px" onclick="posCreateFirstEmployee()">CRÉER LA CAISSE →</button>
-      </div>
-    </div>`;
-}
-
-async function posCreateFirstEmployee() {
-  const name = document.getElementById('pos-setup-name').value.trim();
-  const pin  = document.getElementById('pos-setup-pin').value;
-  if (!name || pin.length !== 4) { toast('Renseigne un nom et un code PIN à 4 chiffres.', 'err'); return; }
   setLoading(true);
   try {
-    const emp = await sbCreatePosEmployee(currentResto, name, pin, 'gerant');
-    _posEmployees = [emp];
-    _posActiveEmployee = emp;
-    _posTab = 'vente';
-    posStartPresence();
-    try { await sbLog('caisse.employee.create', name, { role: 'gerant' }); } catch (_) {}
-    toast('Caisse configurée ✓', 'ok');
-    posRender();
-  } catch (err) {
-    console.error(err);
-    toast("Erreur lors de la création de la caisse", 'err');
-  } finally { setLoading(false); }
+    _caisseProducts = await cachedCaisseProducts(currentResto);
+    _paymentModes   = await cachedPaymentModes(currentResto);
+  } catch (err) { toast('Erreur de chargement caisse : ' + err.message, 'err'); }
+  finally { setLoading(false); }
+
+  renderCaisseCategories();
+  renderCaisseGrid();
+  renderCaissePaymentModes();
+  renderCart();
 }
 
-// ═══════════════════════════════════════════════════════════
-//  ÉCRAN DE VERROUILLAGE (choix employé + PIN)
-// ═══════════════════════════════════════════════════════════
-function posLockHTML() {
-  const resto = (_restos || []).find(r => r.id === currentResto);
-  const shopName = resto ? resto.name : 'Caisse';
+function renderCaisseCategories() {
+  const cats = ['Tous', ...new Set(_caisseProducts.map(p => p.category || 'Sans catégorie'))];
+  document.getElementById('caisse-categories').innerHTML = cats.map(c =>
+    `<div class="caisse-chip${c === _caisseCategory ? ' active' : ''}" onclick="setCaisseCategory('${esc(c)}')">${esc(c)}</div>`
+  ).join('');
+}
+function setCaisseCategory(c) { _caisseCategory = c; renderCaisseCategories(); renderCaisseGrid(); }
 
-  if (!_posPendingEmployee) {
-    return `
-      <div class="pos-center-wrap">
-        <div class="pos-lock-card">
-          <div class="pos-lock-title">🔒 ${esc(shopName)}</div>
-          <p class="pos-setup-sub" style="text-align:center">Qui es-tu ?</p>
-          <div class="pos-avatar-grid">
-            ${_posEmployees.map(e => `
-              <div class="pos-avatar-tile" onclick="posSelectEmployee('${e.id}')">
-                <div class="pos-avatar-circle" style="background:${posAvatarColor(e.name)}">${esc(posInitials(e.name))}</div>
-                <div class="pos-avatar-name">${esc(e.name)}</div>
-                <div class="pos-avatar-role">${POS_ROLES[e.role] || e.role}</div>
-              </div>`).join('')}
-          </div>
-        </div>
-      </div>`;
-  }
-
-  const dots = [0, 1, 2, 3].map(i => `<div class="pos-pin-dot${i < _posPinInput.length ? (_posPinError ? ' err' : ' filled') : ''}"></div>`).join('');
-  const digits = [1,2,3,4,5,6,7,8,9].map(d => `<button class="pos-keypad-btn" onclick="posPressDigit('${d}')">${d}</button>`).join('');
-  return `
-    <div class="pos-center-wrap">
-      <div class="pos-lock-card">
-        <div class="pos-lock-title">🔒 ${esc(shopName)}</div>
-        <p class="pos-setup-sub" style="text-align:center;margin-bottom:2px">Code PIN de ${esc(_posPendingEmployee.name)}</p>
-        <button class="pos-link-btn" onclick="posBackToAvatars()">← changer de personne</button>
-        <div class="pos-pin-dots">${dots}</div>
-        ${_posPinError ? `<p class="pos-pin-error">${esc(_posPinError)}</p>` : ''}
-        <div class="pos-keypad">
-          ${digits}
-          <div></div>
-          <button class="pos-keypad-btn" onclick="posPressDigit('0')">0</button>
-          <button class="pos-keypad-btn pos-keypad-del" onclick="posBackspace()">⌫</button>
-        </div>
-      </div>
-    </div>`;
-}
-
-function posSelectEmployee(id) {
-  _posPendingEmployee = _posEmployees.find(e => e.id === id) || null;
-  _posPinInput = ''; _posPinError = '';
-  posRender();
-}
-function posBackToAvatars() { _posPendingEmployee = null; _posPinInput = ''; _posPinError = ''; posRender(); }
-
-function posPressDigit(d) {
-  if (!_posPendingEmployee || _posPinInput.length >= 4) return;
-  _posPinInput += d;
-  _posPinError = '';
-  if (_posPinInput.length === 4) {
-    if (_posPinInput === _posPendingEmployee.pin) {
-      _posActiveEmployee = _posPendingEmployee;
-      _posPendingEmployee = null;
-      _posPinInput = '';
-      const allowed = POS_TABS.find(t => t.roles.includes(_posActiveEmployee.role));
-      _posTab = allowed ? allowed.id : 'vente';
-      posStartPresence();
-      posRender();
-      return;
-    }
-    _posPinError = 'Code incorrect';
-    posRender();
-    setTimeout(() => { _posPinInput = ''; posRender(); }, 450);
-    return;
-  }
-  posRender();
-}
-function posBackspace() { _posPinInput = _posPinInput.slice(0, -1); posRender(); }
-
-function posLogout() {
-  posStopPresence();
-  _posActiveEmployee = null;
-  _posPendingEmployee = null;
-  _posPinInput = ''; _posPinError = '';
-  _posCart = []; _posPaymentMode = null; _posCashGiven = ''; _posDiscountType = null; _posDiscountValue = '';
-  posRender();
-}
-
-// ═══════════════════════════════════════════════════════════
-//  PRÉSENCE "EN LIGNE" (équipe caisse)
-// ═══════════════════════════════════════════════════════════
-function posStartPresence() {
-  if (!_posActiveEmployee) return;
-  posHeartbeat();
-  posRefreshOnline();
-  if (_posHeartbeatInterval) clearInterval(_posHeartbeatInterval);
-  if (_posOnlinePollInterval) clearInterval(_posOnlinePollInterval);
-  if (_posOrdersPollInterval) clearInterval(_posOrdersPollInterval);
-  _posHeartbeatInterval  = setInterval(posHeartbeat, 20000);
-  _posOnlinePollInterval = setInterval(posRefreshOnline, 15000);
-  _posOrdersPollInterval = setInterval(posPollTickets, 5000);
-}
-function posStopPresence() {
-  if (_posHeartbeatInterval) { clearInterval(_posHeartbeatInterval); _posHeartbeatInterval = null; }
-  if (_posOnlinePollInterval) { clearInterval(_posOnlinePollInterval); _posOnlinePollInterval = null; }
-  if (_posOrdersPollInterval) { clearInterval(_posOrdersPollInterval); _posOrdersPollInterval = null; }
-  if (_posActiveEmployee) { try { sbClearPosPresence(_posActiveEmployee.id); } catch (_) {} }
-}
-async function posHeartbeat() {
-  if (!_posActiveEmployee || !currentResto) return;
-  try { await sbUpdatePosPresence(_posActiveEmployee.id, currentResto, _posActiveEmployee.name, _posActiveEmployee.role); } catch (_) {}
-}
-async function posRefreshOnline() {
-  if (!currentResto) return;
-  try {
-    _posOnline = await sbGetPosOnline(currentResto);
-    posUpdateOnlineBadge();
-  } catch (_) {}
-}
-function posUpdateOnlineBadge() {
-  const el = document.getElementById('pos-online-count');
-  if (el) el.textContent = _posOnline.length;
-}
-
-/** Rafraîchit les tickets depuis Supabase (polling) : détecte les nouvelles commandes
- *  saisies sur un autre poste et met à jour l'onglet Commandes sans rechargement manuel. */
-async function posPollTickets() {
-  if (!_posActiveEmployee || !currentResto) return;
-  try {
-    const fresh = await sbGetPosTickets(currentResto);
-    const knownIds = new Set(_posTickets.map(t => t.id));
-    const arrived = fresh.filter(t => !knownIds.has(t.id) && t.status === 'en_attente');
-    _posTickets = fresh;
-    if (arrived.length) {
-      toast(arrived.length > 1 ? `${arrived.length} nouvelles commandes` : 'Nouvelle commande reçue', 'info');
-    }
-    // Re-rendu systématique : reflète aussi les commandes marquées "prête" depuis un autre poste
-    if (_posTab === 'commandes') posRenderTab();
-  } catch (_) {}
-}
-
-// ═══════════════════════════════════════════════════════════
-//  SHELL DE L'APP CAISSE (barre d'onglets + header)
-// ═══════════════════════════════════════════════════════════
-function posShellHTML() {
-  const allowedTabs = POS_TABS.filter(t => t.roles.includes(_posActiveEmployee.role));
-  return `
-    <div class="pos-topbar">
-      <div class="pos-tabs">
-        ${allowedTabs.map(t => `
-          <button class="pos-tab-btn${_posTab === t.id ? ' active' : ''}" data-tab="${t.id}" onclick="posSetTab('${t.id}')">
-            <span>${t.icon}</span> ${t.label}
-          </button>`).join('')}
-      </div>
-      <div class="pos-topbar-right">
-        <button class="pos-chip-btn${_posSettings.autoPrintKitchen ? ' on' : ''}" onclick="posToggleAutoPrint()" title="Impression automatique du bon cuisine">
-          🍳 Impression ${_posSettings.autoPrintKitchen ? 'auto' : 'off'}
-        </button>
-        <div class="pos-chip-btn" style="cursor:default">
-          <span class="pos-online-dot"></span> <span id="pos-online-count">${_posOnline.length}</span> en ligne
-        </div>
-        <div class="pos-user-chip">
-          <div class="pos-avatar-sm" style="background:${posAvatarColor(_posActiveEmployee.name)}">${esc(posInitials(_posActiveEmployee.name))}</div>
-          <span>${esc(_posActiveEmployee.name)}</span>
-        </div>
-        <button class="btn-icon" onclick="posLogout()" title="Changer d'employé">⏻</button>
-      </div>
-    </div>
-    <div id="pos-tab-content" class="pos-tab-content"></div>`;
-}
-
-function posSetTab(id) {
-  _posTab = id;
-  document.querySelectorAll('.pos-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === id));
-  posRenderTab();
-}
-
-function posRenderTab() {
-  const content = document.getElementById('pos-tab-content');
-  if (!content) return;
-  switch (_posTab) {
-    case 'vente':      content.innerHTML = posVenteHTML(); posRefreshCatalogGrid(); posRefreshCartPanel(); break;
-    case 'commandes':  content.innerHTML = posCommandesHTML(); break;
-    case 'produits':   content.innerHTML = posProduitsHTML(); break;
-    case 'equipe':     content.innerHTML = posEquipeHTML(); break;
-    case 'historique': content.innerHTML = posHistoriqueHTML(); break;
-    case 'stats':      content.innerHTML = posStatsHTML(); posRenderCharts(); break;
-    case 'cloture':    content.innerHTML = posClotureHTML(); break;
-    case 'reglages':   content.innerHTML = posReglagesHTML(); break;
-    default:           content.innerHTML = posVenteHTML();
-  }
-}
-
-async function posToggleAutoPrint() {
-  _posSettings = { ..._posSettings, autoPrintKitchen: !_posSettings.autoPrintKitchen };
-  posRender();
-  try { await sbSavePosSettings(currentResto, _posSettings); } catch (_) { toast('Erreur de sauvegarde des réglages', 'err'); }
-}
-async function posSetReceiptWidth(width) {
-  if (_posSettings.receiptWidth === width) return;
-  _posSettings = { ..._posSettings, receiptWidth: width };
-  posRender();
-  try { await sbSavePosSettings(currentResto, _posSettings); } catch (_) { toast('Erreur de sauvegarde des réglages', 'err'); }
-}
-
-// ═══════════════════════════════════════════════════════════
-//  ONGLET CAISSE (vente)
-// ═══════════════════════════════════════════════════════════
-function posCategories() {
-  const set = new Set(_posProducts.map(p => p.category || 'Sans catégorie'));
-  return ['Tous', ...Array.from(set)];
-}
-function posFilteredProducts() {
-  const q = (document.getElementById('pos-search')?.value || '').toLowerCase();
-  return _posProducts.filter(p =>
-    p.name.toLowerCase().includes(q) &&
-    (_posActiveCategory === 'Tous' || (p.category || 'Sans catégorie') === _posActiveCategory)
+function renderCaisseGrid() {
+  const search = (document.getElementById('caisse-search').value || '').toLowerCase();
+  const list = _caisseProducts.filter(p =>
+    p.name.toLowerCase().includes(search) &&
+    (_caisseCategory === 'Tous' || (p.category || 'Sans catégorie') === _caisseCategory)
   );
+  const el = document.getElementById('caisse-grid');
+  if (list.length === 0) { el.innerHTML = `<div class="cart-empty">Aucun produit. Ajoutez-en depuis "Produits caisse".</div>`; return; }
+  el.innerHTML = list.map(p => `
+    <div class="caisse-tile" onclick="onCaisseProductClick('${p.id}')">
+      ${p.options.length > 0 ? '<span class="caisse-tile-tag">⚙</span>' : ''}
+      <div class="caisse-tile-name">${esc(p.name)}</div>
+      <div class="caisse-tile-price mono">${fmtEUR(p.price)}</div>
+    </div>
+  `).join('');
 }
 
-function posVenteHTML() {
-  return `
-    <div class="pos-vente-grid">
-      <div>
-        <input id="pos-search" class="search-input" style="margin-bottom:10px;width:100%" placeholder="🔍 Rechercher un produit…" oninput="posRefreshCatalogGrid()">
-        <div class="pos-cat-chips" id="pos-cat-chips">
-          ${posCategories().map(c => `<button class="pos-cat-chip${_posActiveCategory === c ? ' active' : ''}" onclick="posSetCategory('${esc(c).replace(/'/g, "\\'")}')">${esc(c)}</button>`).join('')}
-        </div>
-        <div id="pos-product-grid" class="pos-product-grid"></div>
-      </div>
-      <div id="pos-cart-panel" class="pos-cart-panel"></div>
-    </div>`;
+function onCaisseProductClick(id) {
+  const p = _caisseProducts.find(x => x.id === id);
+  if (!p) return;
+  if (p.options && p.options.length > 0) openCaisseOptionsModal(p);
+  else addToCart(p, []);
 }
 
-function posSetCategory(cat) {
-  _posActiveCategory = cat;
-  document.querySelectorAll('.pos-cat-chip').forEach(el => el.classList.toggle('active', el.textContent.trim() === cat));
-  posRefreshCatalogGrid();
-}
-
-function posRefreshCatalogGrid() {
-  const grid = document.getElementById('pos-product-grid');
-  if (!grid) return;
-  const products = posFilteredProducts();
-  if (!_posProducts.length) {
-    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="es-icon">📦</div><p>Aucun produit. Ajoute-en depuis l'onglet <b>Produits</b>.</p></div>`;
-    return;
-  }
-  if (!products.length) {
-    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><div class="es-icon">🔍</div><p>Aucun résultat.</p></div>`;
-    return;
-  }
-  grid.innerHTML = products.map(p => `
-    <div class="pos-product-tile" onclick="posOpenProduct('${p.id}')">
-      ${(p.options || []).length ? '<span class="pos-tag-dot">🏷️</span>' : ''}
-      <div class="pos-product-name">${esc(p.name)}</div>
-      <div class="pos-product-price">${posFmt(p.price)}</div>
-    </div>`).join('');
-}
-
-function posOpenProduct(id) {
-  const product = _posProducts.find(p => p.id === id);
-  if (!product) return;
-  if (product.options && product.options.length) {
-    _posOptionsModalProduct = product;
-    _posSelectedOptionIds = new Set();
-    posShowModal(posOptionsModalHTML());
-  } else {
-    posAddToCart(product, []);
-  }
-}
-
-function posAddToCart(product, selectedOptions) {
-  const unitPrice = Number(product.price) + selectedOptions.reduce((s, o) => s + (Number(o.priceDelta) || 0), 0);
-  const tvaRate = product.tva_rate != null ? Number(product.tva_rate) : 10;
+function addToCart(product, selectedOptions) {
+  const unitPrice = Number(product.price) + selectedOptions.reduce((s, o) => s + (o.priceDelta || 0), 0);
   const key = product.id + '::' + selectedOptions.map(o => o.id).sort().join(',');
-  const found = _posCart.find(i => i.key === key);
-  if (found) { found.qty += 1; }
-  else { _posCart.push({ key, productId: product.id, name: product.name, options: selectedOptions, unitPrice, tvaRate, qty: 1 }); }
-  posRefreshCartPanel();
+  const existing = _cart.find(i => i.key === key);
+  if (existing) existing.qty += 1;
+  else _cart.push({ key, productId: product.id, name: product.name, unitPrice, options: selectedOptions, qty: 1 });
+  renderCart();
 }
-function posChangeQty(key, delta) {
-  _posCart = _posCart.map(i => i.key === key ? { ...i, qty: i.qty + delta } : i).filter(i => i.qty > 0);
-  posRefreshCartPanel();
-}
-function posRemoveFromCart(key) { _posCart = _posCart.filter(i => i.key !== key); posRefreshCartPanel(); }
 
-// ── Options modal ──
-function posOptionsModalHTML() {
-  const product = _posOptionsModalProduct;
-  const unitPrice = Number(product.price) + product.options.filter(o => _posSelectedOptionIds.has(o.id)).reduce((s, o) => s + (Number(o.priceDelta) || 0), 0);
-  return `
-    <div class="modal-overlay open" onclick="if(event.target===this) posCloseModal()">
-      <div class="modal" style="width:360px">
-        <div class="modal-title" style="display:flex;justify-content:space-between;align-items:center;font-size:19px">
-          ${esc(product.name)} <button class="btn-icon" onclick="posCloseModal()">✕</button>
+function changeCartQty(key, delta) {
+  const item = _cart.find(i => i.key === key);
+  if (!item) return;
+  item.qty += delta;
+  if (item.qty <= 0) _cart = _cart.filter(i => i.key !== key);
+  renderCart();
+}
+function removeCartItem(key) { _cart = _cart.filter(i => i.key !== key); renderCart(); }
+
+function renderCart() {
+  const el = document.getElementById('cart-list');
+  if (_cart.length === 0) {
+    el.innerHTML = '<div class="cart-empty">Le panier est vide. Touchez un produit pour l\'ajouter.</div>';
+  } else {
+    el.innerHTML = _cart.map(i => `
+      <div class="cart-item">
+        <div style="flex:1;min-width:0">
+          <div class="cart-item-name">${esc(i.name)}</div>
+          ${i.options.length ? `<div class="cart-item-opts">${i.options.map(o => esc(o.label)).join(', ')}</div>` : ''}
+          <div class="cart-item-price mono">${fmtEUR(i.unitPrice)} × ${i.qty}</div>
         </div>
-        <p style="font-size:12px;color:var(--muted2);margin:-14px 0 16px">Choisis les options souhaitées</p>
-        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:18px">
-          ${product.options.map(o => {
-            const checked = _posSelectedOptionIds.has(o.id);
-            return `<label class="pos-option-row${checked ? ' checked' : ''}" onclick="posToggleOption('${o.id}')">
-              <span><input type="checkbox" ${checked ? 'checked' : ''} onclick="event.stopPropagation();posToggleOption('${o.id}')"> ${esc(o.label)}</span>
-              ${o.priceDelta ? `<span class="mono">${o.priceDelta > 0 ? '+' : ''}${Number(o.priceDelta).toFixed(2)} €</span>` : ''}
-            </label>`;
-          }).join('')}
+        <div class="cart-item-actions">
+          <button class="cart-qty-btn" onclick="changeCartQty('${i.key}',-1)">−</button>
+          <span class="cart-qty-val mono">${i.qty}</span>
+          <button class="cart-qty-btn" onclick="changeCartQty('${i.key}',1)">+</button>
+          <button class="cart-remove-btn" aria-label="Retirer l'article du panier" onclick="removeCartItem('${i.key}')">✕</button>
         </div>
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:16px">
-          <span style="font-size:12px;color:var(--muted2)">Prix</span>
-          <span class="mono" style="font-size:20px;font-weight:600">${posFmt(unitPrice)}</span>
-        </div>
-        <button class="btn accent" style="width:100%;justify-content:center;padding:12px" onclick="posConfirmAddWithOptions()">Ajouter au panier</button>
       </div>
-    </div>`;
-}
-function posToggleOption(id) {
-  if (_posSelectedOptionIds.has(id)) _posSelectedOptionIds.delete(id); else _posSelectedOptionIds.add(id);
-  posShowModal(posOptionsModalHTML());
-}
-function posConfirmAddWithOptions() {
-  const opts = _posOptionsModalProduct.options.filter(o => _posSelectedOptionIds.has(o.id));
-  posAddToCart(_posOptionsModalProduct, opts);
-  posCloseModal();
-  _posOptionsModalProduct = null;
+    `).join('');
+  }
+  renderCartSummary();
 }
 
-// ── Cart panel + totals ──
-function posCartSubtotal() { return _posCart.reduce((s, i) => s + i.unitPrice * i.qty, 0); }
-function posDiscountAmount() {
-  const v = posParseNum(_posDiscountValue);
-  if (!_posDiscountType || v <= 0) return 0;
-  const subtotal = posCartSubtotal();
-  if (_posDiscountType === 'percent') return Math.min(subtotal, subtotal * (v / 100));
-  return Math.min(subtotal, v);
+// ── Options produit (modale panier) ─────────────────────────
+function openCaisseOptionsModal(product) {
+  _optionsModalProduct = product;
+  _optionsModalSelected = new Set();
+  document.getElementById('caisse-options-modal-title').textContent = product.name.toUpperCase();
+  renderCaisseOptionsModal();
+  document.getElementById('caisse-options-modal-overlay').classList.add('open');
 }
-function posCartTotal() { return Math.max(0, posCartSubtotal() - posDiscountAmount()); }
+function renderCaisseOptionsModal() {
+  const p = _optionsModalProduct;
+  document.getElementById('caisse-options-list').innerHTML = p.options.map(o => `
+    <label style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-radius:2px;border:1px solid ${_optionsModalSelected.has(o.id) ? 'var(--pink)' : 'var(--border)'};cursor:pointer">
+      <span style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--white)">
+        <input type="checkbox" ${_optionsModalSelected.has(o.id) ? 'checked' : ''} onchange="toggleCaisseOption('${o.id}')"> ${esc(o.label)}
+      </span>
+      ${o.priceDelta ? `<span class="mono" style="font-size:12px;color:var(--muted2)">${o.priceDelta > 0 ? '+' : ''}${o.priceDelta.toFixed(2)} €</span>` : ''}
+    </label>
+  `).join('');
+  const total = Number(p.price) + p.options.filter(o => _optionsModalSelected.has(o.id)).reduce((s, o) => s + (o.priceDelta || 0), 0);
+  document.getElementById('caisse-options-price').textContent = fmtEUR(total);
+}
+function toggleCaisseOption(id) { _optionsModalSelected.has(id) ? _optionsModalSelected.delete(id) : _optionsModalSelected.add(id); renderCaisseOptionsModal(); }
+function closeCaisseOptionsModal() { document.getElementById('caisse-options-modal-overlay').classList.remove('open'); _optionsModalProduct = null; }
+function confirmCaisseOptionsAdd() {
+  const opts = _optionsModalProduct.options.filter(o => _optionsModalSelected.has(o.id));
+  addToCart(_optionsModalProduct, opts);
+  closeCaisseOptionsModal();
+}
 
-/** Formate un taux de TVA (10 → "10 %", 5.5 → "5,5 %") */
-function posVatRateLabel(rate) {
-  const r = Number(rate) || 0;
-  return (Number.isInteger(r) ? String(r) : String(r).replace('.', ',')) + ' %';
+// ── Remise / totaux / paiement ──────────────────────────────
+function toggleCaisseDiscount() {
+  const c = document.getElementById('caisse-discount-controls');
+  const willOpen = c.style.display === 'none';
+  c.style.display = willOpen ? 'flex' : 'none';
+  if (!willOpen) document.getElementById('caisse-discount-value').value = '';
+  renderCartSummary();
 }
+
+function getCartSubtotal() { return _cart.reduce((s, i) => s + i.unitPrice * i.qty, 0); }
+function getCartDiscount(subtotal) {
+  if (document.getElementById('caisse-discount-controls').style.display === 'none') return 0;
+  const type = document.getElementById('caisse-discount-type').value;
+  const val  = parseFloat(document.getElementById('caisse-discount-value').value) || 0;
+  if (val <= 0) return 0;
+  return type === 'percent' ? Math.min(subtotal, subtotal * val / 100) : Math.min(subtotal, val);
+}
+function getCartTotal() { const s = getCartSubtotal(); return Math.max(0, s - getCartDiscount(s)); }
+
+function renderCaissePaymentModes() {
+  const icons = { card: '💳', cash: '💵', other: '🎫' };
+  document.getElementById('caisse-payment-modes').innerHTML = _paymentModes.map(m => `
+    <button class="caisse-pay-btn${_caissePaymentMode?.id === m.id ? ' active' : ''}" onclick="selectCaissePaymentMode('${m.id}')">
+      ${icons[m.type] || '💳'} ${esc(m.label)}
+    </button>
+  `).join('');
+}
+function selectCaissePaymentMode(id) {
+  _caissePaymentMode = _paymentModes.find(m => m.id === id) || null;
+  renderCaissePaymentModes();
+  const cashSection = document.getElementById('caisse-cash-section');
+  if (_caissePaymentMode?.requiresCash) { cashSection.style.display = 'block'; renderCaisseBillButtons(); }
+  else cashSection.style.display = 'none';
+  renderCartSummary();
+}
+function renderCaisseBillButtons() {
+  const total = getCartTotal();
+  document.getElementById('caisse-bills').innerHTML =
+    `<button class="bill-btn" onclick="setCaisseCash(${total.toFixed(2)})">Exact</button>` +
+    [5, 10, 20, 50].map(b => `<button class="bill-btn" onclick="setCaisseCash(${b})">${b} €</button>`).join('');
+}
+function setCaisseCash(v) { document.getElementById('caisse-cash-given').value = v; renderCartSummary(); }
+
+function renderCartSummary() {
+  const subtotal = getCartSubtotal();
+  const discount = getCartDiscount(subtotal);
+  const total = Math.max(0, subtotal - discount);
+
+  document.getElementById('cart-subtotal-row').style.display = discount > 0 ? 'flex' : 'none';
+  document.getElementById('cart-discount-row').style.display = discount > 0 ? 'flex' : 'none';
+  document.getElementById('cart-subtotal').textContent = fmtEUR(subtotal);
+  document.getElementById('cart-discount-amount').textContent = '-' + fmtEUR(discount);
+  document.getElementById('cart-total').textContent = fmtEUR(total);
+
+  let cashOk = true;
+  if (_caissePaymentMode?.requiresCash) {
+    const given = parseFloat(document.getElementById('caisse-cash-given').value) || 0;
+    const change = Math.max(0, given - total);
+    document.getElementById('caisse-change').innerHTML = document.getElementById('caisse-cash-given').value
+      ? `Rendu à donner : <b>${fmtEUR(change)}</b>` : '';
+    cashOk = given >= total - 0.001;
+  }
+
+  const canValidate = _cart.length > 0 && _caissePaymentMode && cashOk;
+  const btn = document.getElementById('caisse-validate-btn');
+  btn.style.opacity = canValidate ? '1' : '.4';
+  btn.style.cursor  = canValidate ? 'pointer' : 'not-allowed';
+  btn.dataset.ready = canValidate ? '1' : '0';
+}
+
 /**
- * Ventile un montant TTC (prix affichés = TTC) par taux de TVA à partir
- * d'une liste d'articles de panier/ticket ({ unitPrice, qty, tvaRate }).
- * La remise éventuelle est répartie au prorata entre les taux.
+ * Reflète côté client l'impact stock déjà appliqué par le trigger SQL
+ * (trg_caisse_ticket_apply_stock), pour que Dashboard/Stock affichent
+ * la bonne quantité sans recharger la page. Purement cosmétique :
+ * la vérité vient toujours de la base, jamais du client.
+ * sign = -1 pour une vente, +1 pour une annulation (recrédit).
  */
-function posVatBreakdownFromItems(items, subtotal, total) {
-  const ratio = subtotal > 0 ? total / subtotal : 1;
-  const groups = {};
-  (items || []).forEach(i => {
-    const rate = i.tvaRate != null ? Number(i.tvaRate) : 10;
-    const ttc = i.unitPrice * i.qty * ratio;
-    groups[rate] = (groups[rate] || 0) + ttc;
+function applyLocalStockImpact(ticket, sign) {
+  let touched = false;
+  ticket.items.forEach(it => {
+    const prod = _caisseProducts.find(p => p.id === it.productId);
+    if (!prod || !prod.stockItemId) return;
+    const stockItem = _stock.find(s => s.id === prod.stockItemId);
+    if (!stockItem) return;
+    stockItem.qty = Math.max(0, stockItem.qty + sign * prod.stockQtyPerUnit * it.qty);
+    if (_cache.stock[currentResto]) {
+      const cached = _cache.stock[currentResto].find(s => s.id === prod.stockItemId);
+      if (cached) cached.qty = stockItem.qty;
+    }
+    touched = true;
   });
-  return Object.keys(groups).map(rate => {
-    const r = Number(rate);
-    const ttc = groups[rate];
-    const ht = r > 0 ? ttc / (1 + r / 100) : ttc;
-    return { rate: r, ttc, ht, tva: ttc - ht };
-  }).sort((a, b) => b.rate - a.rate);
-}
-function posCartVatBreakdown() { return posVatBreakdownFromItems(_posCart, posCartSubtotal(), posCartTotal()); }
-function posVatSummaryLinesHTML(breakdown) {
-  return (breakdown || []).map(b => `
-    <div class="pos-summary-line muted" style="font-size:11px"><span>dont TVA ${posVatRateLabel(b.rate)}</span><span class="mono">${posFmt(b.tva)}</span></div>`).join('');
-}
-function posCashGivenNum() { return posParseNum(_posCashGiven); }
-function posChange() { return _posPaymentMode && _posPaymentMode.requiresCash ? Math.max(0, posCashGivenNum() - posCartTotal()) : 0; }
-function posCanValidate() {
-  return _posCart.length > 0 && !!_posPaymentMode && (!_posPaymentMode.requiresCash || posCashGivenNum() >= posCartTotal() - 0.0001);
+  if (touched) refreshAll();
 }
 
-function posRefreshCartPanel() {
-  const panel = document.getElementById('pos-cart-panel');
-  if (!panel) return;
-  const subtotal = posCartSubtotal();
-  const discount = posDiscountAmount();
-  const total = posCartTotal();
+async function validateCaisseTicket() {
+  if (document.getElementById('caisse-validate-btn').dataset.ready !== '1') return;
+  const subtotal = getCartSubtotal();
+  const discountAmount = getCartDiscount(subtotal);
+  const total = Math.max(0, subtotal - discountAmount);
+  const discountOn = document.getElementById('caisse-discount-controls').style.display !== 'none';
+  const cashGivenVal = _caissePaymentMode.requiresCash ? (parseFloat(document.getElementById('caisse-cash-given').value) || 0) : null;
+  const changeVal    = _caissePaymentMode.requiresCash ? Math.max(0, cashGivenVal - total) : null;
 
-  panel.innerHTML = `
-    <div class="pos-cart-header">🧾 Ticket en cours</div>
-    ${_posCart.length === 0 ? `<p class="pos-cart-empty">Le panier est vide. Touche un produit pour l'ajouter.</p>` : `
-      <div class="pos-cart-list">
-        ${_posCart.map(i => `
-          <div class="pos-cart-item">
-            <div class="pos-cart-item-info">
-              <div class="pos-cart-item-name">${esc(i.name)}</div>
-              ${i.options && i.options.length ? `<div class="pos-cart-item-opts">${i.options.map(o => esc(o.label)).join(', ')}</div>` : ''}
-              <div class="pos-cart-item-price mono">${posFmt(i.unitPrice)} × ${i.qty}</div>
-            </div>
-            <div class="pos-cart-item-actions">
-              <button class="pos-round-btn" onclick="posChangeQty('${i.key}',-1)">−</button>
-              <span class="mono">${i.qty}</span>
-              <button class="pos-round-btn" onclick="posChangeQty('${i.key}',1)">+</button>
-              <button class="pos-round-btn danger" onclick="posRemoveFromCart('${i.key}')">🗑</button>
-            </div>
-          </div>`).join('')}
-      </div>`}
-
-    ${_posCart.length > 0 ? `
-      <div class="pos-discount-row">
-        <button class="pos-chip-btn${_posDiscountType ? ' on' : ''}" onclick="posToggleDiscount()">% Remise</button>
-        ${_posDiscountType ? `
-          <select id="pos-discount-type" class="select-input" onchange="posOnDiscountTypeChange()">
-            <option value="percent"${_posDiscountType === 'percent' ? ' selected' : ''}>%</option>
-            <option value="amount"${_posDiscountType === 'amount' ? ' selected' : ''}>€</option>
-          </select>
-          <input id="pos-discount-value" class="search-input" style="width:70px;flex:none" value="${esc(_posDiscountValue)}" placeholder="0" oninput="posOnDiscountValueInput()">
-        ` : ''}
-      </div>` : ''}
-
-    <div class="pos-summary">
-      ${discount > 0 ? `
-        <div class="pos-summary-line muted"><span>Sous-total</span><span class="mono">${posFmt(subtotal)}</span></div>
-        <div class="pos-summary-line" style="color:var(--red)"><span>Remise</span><span class="mono">-${posFmt(discount)}</span></div>` : ''}
-      <div id="pos-vat-lines">${posVatSummaryLinesHTML(posCartVatBreakdown())}</div>
-      <div class="pos-summary-total">
-        <span>Total</span>
-        <span class="mono" id="pos-cart-total-value">${posFmt(total)}</span>
-      </div>
-    </div>
-
-    ${_posCart.length > 0 ? `
-      <div class="pos-pay-modes">
-        ${_posSettings.paymentModes.map(m => `
-          <button class="pos-pay-btn${_posPaymentMode && _posPaymentMode.id === m.id ? ' active' : ''}" onclick="posSelectPaymentMode('${m.id}')">
-            ${POS_PAY_ICON[m.type] || '👛'} ${esc(m.label)}
-          </button>`).join('')}
-      </div>
-      ${_posPaymentMode && _posPaymentMode.requiresCash ? `
-        <div class="pos-cash-block">
-          <input id="pos-cash-given" class="search-input" style="width:100%;margin-bottom:8px" placeholder="Montant remis (€)" value="${esc(_posCashGiven)}" oninput="posOnCashGivenInput()">
-          <div class="pos-bill-row">
-            <button class="pos-chip-btn" onclick="posSetCashGiven('${total.toFixed(2)}')">Exact</button>
-            ${POS_BILLS.map(b => `<button class="pos-chip-btn" onclick="posSetCashGiven('${b}')">${b} €</button>`).join('')}
-          </div>
-          <div class="mono" style="font-size:13px;color:var(--muted2);margin-top:6px" id="pos-cash-change-line">
-            ${_posCashGiven ? `Rendu à donner : <span style="color:var(--green);font-weight:600" id="pos-cart-change-value">${posFmt(posChange())}</span>` : ''}
-          </div>
-        </div>` : ''}
-      <button id="pos-validate-btn" class="btn accent" style="width:100%;justify-content:center;padding:13px;margin-top:10px;font-size:14px" ${posCanValidate() ? '' : 'disabled'} onclick="posValidateTicket()">
-        ✓ Valider le ticket
-      </button>` : ''}
-  `;
-}
-
-function posToggleDiscount() { _posDiscountType = _posDiscountType ? null : 'percent'; _posDiscountValue = ''; posRefreshCartPanel(); }
-function posOnDiscountTypeChange() { _posDiscountType = document.getElementById('pos-discount-type').value; posRefreshCartPanel(); }
-function posOnDiscountValueInput() {
-  const el = document.getElementById('pos-discount-value');
-  _posDiscountValue = el.value.replace(/[^0-9.,]/g, '');
-  el.value = _posDiscountValue;
-  posUpdateCartTotalsInline();
-}
-function posSelectPaymentMode(id) {
-  _posPaymentMode = _posSettings.paymentModes.find(m => m.id === id) || null;
-  _posCashGiven = '';
-  posRefreshCartPanel();
-}
-function posSetCashGiven(v) {
-  _posCashGiven = String(v);
-  posRefreshCartPanel();
-}
-function posOnCashGivenInput() {
-  const el = document.getElementById('pos-cash-given');
-  _posCashGiven = el.value.replace(/[^0-9.,]/g, '');
-  el.value = _posCashGiven;
-  posUpdateCartTotalsInline();
-}
-/** Met à jour uniquement les montants calculés sans reconstruire les champs texte (garde le focus clavier) */
-function posUpdateCartTotalsInline() {
-  const totalEl = document.getElementById('pos-cart-total-value');
-  if (totalEl) totalEl.textContent = posFmt(posCartTotal());
-  const vatLines = document.getElementById('pos-vat-lines');
-  if (vatLines) vatLines.innerHTML = posVatSummaryLinesHTML(posCartVatBreakdown());
-  const changeLine = document.getElementById('pos-cash-change-line');
-  if (changeLine) {
-    changeLine.innerHTML = _posCashGiven ? `Rendu à donner : <span style="color:var(--green);font-weight:600">${posFmt(posChange())}</span>` : '';
-  }
-  const btn = document.getElementById('pos-validate-btn');
-  if (btn) btn.disabled = !posCanValidate();
-}
-
-async function posValidateTicket() {
-  if (!posCanValidate()) return;
-  const subtotal = posCartSubtotal();
-  const discountAmount = posDiscountAmount();
-  const total = posCartTotal();
-  const draft = {
-    items: _posCart,
-    subtotal,
-    discount: _posDiscountType ? { type: _posDiscountType, value: posParseNum(_posDiscountValue), amount: discountAmount } : null,
-    total,
-    vatBreakdown: posVatBreakdownFromItems(_posCart, subtotal, total),
-    paymentMode: _posPaymentMode,
-    cashGiven: _posPaymentMode.requiresCash ? posCashGivenNum() : null,
-    change: _posPaymentMode.requiresCash ? posChange() : null,
-    employeeName: _posActiveEmployee.name,
-  };
   setLoading(true);
   try {
-    const ticket = await sbCreatePosTicket(currentResto, draft);
-    _posTickets = [ticket, ..._posTickets];
-    _posCart = []; _posPaymentMode = null; _posCashGiven = ''; _posDiscountType = null; _posDiscountValue = '';
-    posRenderTab();
-    if (_posSettings.autoPrintKitchen) posPrintKitchen(ticket);
-    _posOpenReceiptTicket = ticket;
-    posShowModal(posReceiptModalHTML(ticket));
-  } catch (err) {
-    console.error(err);
-    toast('Erreur lors de la validation du ticket', 'err');
-  } finally { setLoading(false); }
+    const ticket = await sbCreateTicket(currentResto, {
+      items: _cart, subtotal,
+      discount: (discountOn && discountAmount > 0) ? {
+        type: document.getElementById('caisse-discount-type').value,
+        value: parseFloat(document.getElementById('caisse-discount-value').value) || 0,
+        amount: discountAmount,
+      } : null,
+      total,
+      paymentMode: _caissePaymentMode,
+      cashGiven: cashGivenVal,
+      change: changeVal,
+      employeeId: currentUser.id,
+      employeeName: currentUser.name,
+    });
+    _tickets.unshift(ticket);
+    applyLocalStockImpact(ticket, -1);
+    await sbLog('caisse.vente', `Ticket #${ticket.number}`, { total: ticket.total });
+    toast(`Ticket #${ticket.number} encaissé — ${fmtEUR(total)}`, 'ok');
+
+    printCaisseKitchenTicket(ticket);
+    openCaisseReceiptModal(ticket);
+
+    _cart = [];
+    _caissePaymentMode = null;
+    document.getElementById('caisse-cash-given').value = '';
+    document.getElementById('caisse-discount-controls').style.display = 'none';
+    document.getElementById('caisse-discount-value').value = '';
+    document.getElementById('caisse-cash-section').style.display = 'none';
+    renderCart(); renderCaissePaymentModes();
+  } catch (err) { toast('Erreur : ' + err.message, 'err'); }
+  finally { setLoading(false); }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  ONGLET COMMANDES (suivi cuisine du jour)
-// ═══════════════════════════════════════════════════════════
-function posTodaysOrders() {
-  const key = posTodayKey();
-  return _posTickets
-    .filter(t => posTodayKey(new Date(t.created_at)) === key)
-    .sort((a, b) => a.status === b.status ? new Date(a.created_at) - new Date(b.created_at) : (a.status === 'prete' ? 1 : -1));
-}
-
-function posCommandesHTML() {
-  const orders = posTodaysOrders();
-  const pending = orders.filter(o => o.status !== 'prete').length;
-  return `
-    <div class="page-header" style="margin-bottom:16px">
-      <div class="ph-left"><h1 style="font-size:22px">COMMANDES <em>DU JOUR</em></h1></div>
-      <span class="status-badge" style="background:${pending > 0 ? 'rgba(255,140,0,.15)' : 'rgba(0,229,160,.15)'};color:${pending > 0 ? 'var(--orange)' : 'var(--green)'}">${pending} en attente</span>
+// ── Bon de cuisine (impression) ─────────────────────────────
+function printCaisseKitchenTicket(ticket) {
+  if (!ticket) return;
+  const resto = _restos.find(r => r.id === currentResto);
+  document.getElementById('kitchen-ticket-print').innerHTML = `
+    <div style="text-align:center;margin-bottom:10px">
+      <div style="font-size:15px;font-weight:600">${esc(resto ? resto.name : '')}</div>
+      <div style="font-size:13px;font-weight:600;margin:4px 0">BON DE CUISINE</div>
+      <div style="font-size:12px">Ticket #${ticket.number}</div>
+      <div style="font-size:12px">${new Date(ticket.dateISO || Date.now()).toLocaleString('fr-FR')}</div>
+      ${ticket.employeeName ? `<div style="font-size:12px">Vendeur : ${esc(ticket.employeeName)}</div>` : ''}
     </div>
-    ${orders.length === 0 ? `<div class="empty-state"><div class="es-icon">🍳</div><p>Aucune commande aujourd'hui.</p></div>` : `
-      <div class="pos-order-grid">
-        ${orders.map(o => `
-          <div class="pos-order-card${o.status === 'prete' ? ' done' : ''}">
-            <div class="pos-order-head">
-              <span class="pos-order-num">#${o.number}</span>
-              <span class="pos-order-time">🕓 ${posElapsed(o.created_at)}</span>
-            </div>
-            ${o.employee_name ? `<div class="pos-order-emp">Pris par ${esc(o.employee_name)}</div>` : ''}
-            <div class="pos-order-items">
-              ${o.items.map(i => `
-                <div style="margin-bottom:6px">
-                  <div style="font-size:14px;font-weight:700">${i.qty} × ${esc(i.name)}</div>
-                  ${(i.options || []).map(opt => `<div style="font-size:12px;color:var(--orange);padding-left:10px">– ${esc(opt.label)}</div>`).join('')}
-                </div>`).join('')}
-            </div>
-            <button class="btn ${o.status === 'prete' ? '' : 'green-btn'}" style="width:100%;justify-content:center" onclick="posToggleOrderStatus('${o.id}')">
-              ${o.status === 'prete' ? 'Remettre en attente' : 'Marquer prête'}
-            </button>
-          </div>`).join('')}
-      </div>`}
+    <div style="border-top:2px dashed #000;margin:8px 0"></div>
+    ${ticket.items.map(i => `
+      <div style="margin-bottom:10px">
+        <div style="font-size:16px;font-weight:700">${i.qty} × ${esc(i.name)}</div>
+        ${(i.options || []).map(o => `<div style="font-size:13px;padding-left:14px">– ${esc(o.label)}</div>`).join('')}
+      </div>
+    `).join('')}
+    <div style="border-top:2px dashed #000;margin:8px 0"></div>
+    <div style="font-size:12px;text-align:center">${ticket.items.reduce((s, i) => s + i.qty, 0)} article(s) au total</div>
   `;
+  document.body.classList.add('kitchen-print-mode');
+  setTimeout(() => window.print(), 120);
+}
+window.addEventListener('afterprint', () => document.body.classList.remove('kitchen-print-mode'));
+
+// ═══════════════════════════════════════════════════════════
+//  COMMANDES (ÉCRAN CUISINE)
+// ═══════════════════════════════════════════════════════════
+async function initCaisseCommandes() {
+  if (!currentResto) return;
+  setLoading(true);
+  try { _tickets = await sbGetTickets(currentResto, 2); }
+  catch (err) { toast('Erreur : ' + err.message, 'err'); _tickets = []; }
+  finally { setLoading(false); }
+  renderCommandes();
 }
 
-async function posToggleOrderStatus(id) {
-  const t = _posTickets.find(x => x.id === id);
+function renderCommandes() {
+  const todays = _tickets.filter(t => isToday(t.dateISO) && t.type !== 'annulation').sort((a, b) => {
+    if (a.status !== b.status) return a.status === 'prete' ? 1 : -1;
+    return new Date(a.dateISO) - new Date(b.dateISO);
+  });
+  const pending = todays.filter(t => t.status !== 'prete').length;
+  document.getElementById('commandes-subtitle').textContent = `${todays.length} commande(s) — ${pending} en attente`;
+  const badge = document.getElementById('nav-commandes-count');
+  badge.textContent = pending;
+  badge.className = `nav-badge${pending === 0 ? ' nb0' : ''}`;
+
+  const el = document.getElementById('commandes-grid');
+  if (todays.length === 0) { el.innerHTML = '<div class="cart-empty">Aucune commande aujourd\'hui.</div>'; return; }
+  el.innerHTML = todays.map(t => `
+    <div class="order-card${t.status === 'prete' ? ' done' : ''}">
+      <div class="order-card-head">
+        <span class="order-card-num">#${t.number}</span>
+        <span class="order-card-time">${timeAgo(t.dateISO)}</span>
+      </div>
+      ${t.employeeName ? `<div class="order-card-emp">Pris par ${esc(t.employeeName)}</div>` : ''}
+      ${t.items.map(i => `
+        <div class="order-card-item">${i.qty} × ${esc(i.name)}</div>
+        ${(i.options || []).map(o => `<div class="order-card-opt">– ${esc(o.label)}</div>`).join('')}
+      `).join('')}
+      <button class="order-card-btn" onclick="toggleOrderStatus('${t.id}')">${t.status === 'prete' ? 'Remettre en attente' : 'Marquer prête'}</button>
+    </div>
+  `).join('');
+}
+
+async function toggleOrderStatus(id) {
+  const t = _tickets.find(x => x.id === id);
   if (!t) return;
-  const next = t.status === 'prete' ? 'en_attente' : 'prete';
-  t.status = next;
-  posRenderTab();
-  try { await sbUpdatePosTicketStatus(id, next); } catch (err) { toast('Erreur de mise à jour', 'err'); }
+  const newStatus = t.status === 'prete' ? 'en_attente' : 'prete';
+  try { const updated = await sbUpdateTicketStatus(id, newStatus); t.status = updated.status; renderCommandes(); }
+  catch (err) { toast('Erreur : ' + err.message, 'err'); }
 }
 
 // ═══════════════════════════════════════════════════════════
-//  ONGLET PRODUITS (catalogue)
+//  PRODUITS CAISSE (+ MODES DE PAIEMENT)
 // ═══════════════════════════════════════════════════════════
-function posProduitsHTML() {
-  const cats = posCategories().filter(c => c !== 'Tous');
-  return `
-    <div class="pos-two-col">
-      <div class="pos-form-card">
-        <h3 class="pos-form-title">Nouveau produit</h3>
-        <div class="form-field" style="margin-bottom:12px">
-          <label>Nom</label>
-          <input id="pos-new-name" type="text" placeholder="Ex. Crousty">
-        </div>
-        <div class="form-field" style="margin-bottom:12px">
-          <label>Prix (€)</label>
-          <input id="pos-new-price" type="text" placeholder="6.50" oninput="this.value=this.value.replace(/[^0-9.,]/g,'')">
-        </div>
-        <div class="form-field" style="margin-bottom:12px">
-          <label>TVA</label>
-          <select id="pos-new-tva" class="select-input">
-            <option value="10" selected>10 % (sur place / à emporter)</option>
-            <option value="5.5">5,5 % (produits de 1ère nécessité)</option>
-            <option value="20">20 % (alcool, boissons)</option>
-          </select>
-        </div>
-        <div class="form-field" style="margin-bottom:16px">
-          <label>Catégorie</label>
-          <input id="pos-new-category" type="text" list="pos-cat-list" placeholder="Ex. Sandwichs">
-          <datalist id="pos-cat-list">${cats.map(c => `<option value="${esc(c)}">`).join('')}</datalist>
-        </div>
-        <div class="form-field" style="margin-bottom:8px">
-          <label>Options (facultatif)</label>
-        </div>
-        <p style="font-size:11px;color:var(--muted2);margin:-6px 0 8px">Ex. « Sans oignon » ou « Supplément fromage » avec un prix.</p>
-        <div style="display:flex;gap:6px;margin-bottom:8px">
-          <input id="pos-opt-label" class="search-input" style="min-width:0" placeholder="Sans oignon">
-          <input id="pos-opt-price" class="search-input" style="width:72px;flex:none" placeholder="+0.00" oninput="this.value=this.value.replace(/[^0-9.,-]/g,'')">
-          <button class="btn" onclick="posAddOptionDraft()">＋</button>
-        </div>
-        <div id="pos-opt-draft-list">${posOptionDraftListHTML()}</div>
-        <button class="btn accent" style="width:100%;justify-content:center;padding:11px;margin-top:8px" onclick="posAddProduct()">＋ Ajouter le produit</button>
-      </div>
+async function initCaisseProduits() {
+  if (!currentResto) return;
+  setLoading(true);
+  try {
+    _caisseProducts = await cachedCaisseProducts(currentResto);
+    _paymentModes   = await cachedPaymentModes(currentResto);
+  } catch (err) { toast('Erreur : ' + err.message, 'err'); }
+  finally { setLoading(false); }
+  renderCaisseProductsList();
+  renderCaisseModesList();
+  updateCpCatList();
+}
+
+function updateCpCatList() {
+  const cats = [...new Set(_caisseProducts.map(p => p.category || 'Sans catégorie'))];
+  document.getElementById('cp-cat-list').innerHTML = cats.map(c => `<option value="${esc(c)}">`).join('');
+}
+
+function updateCpStockList() {
+  const sel = document.getElementById('cp-stock-item');
+  const sorted = [..._stock].sort((a, b) => a.name.localeCompare(b.name));
+  sel.innerHTML = '<option value="">— Aucun lien —</option>' +
+    sorted.map(s => `<option value="${s.id}">${esc(s.name)} (${s.qty} en stock)</option>`).join('');
+}
+
+function renderCaisseProductsList() {
+  document.getElementById('cp-count').textContent = `${_caisseProducts.length} produit(s)`;
+  const el = document.getElementById('cp-products-list');
+  if (_caisseProducts.length === 0) { el.innerHTML = '<div class="cart-empty">Aucun produit.</div>'; return; }
+  el.innerHTML = _caisseProducts.map(p => {
+    const linked = p.stockItemId ? _stock.find(s => s.id === p.stockItemId) : null;
+    return `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--card);border:1px solid var(--border);border-radius:2px;margin-bottom:6px">
       <div>
-        <h3 class="pos-form-title" id="pos-catalog-count">Catalogue (${_posProducts.length})</h3>
-        <div id="pos-catalog-list">${posCatalogListHTML()}</div>
+        <span style="font-size:13.5px;color:var(--white)">${esc(p.name)}</span>
+        <span style="font-size:10.5px;color:var(--muted2);margin-left:8px;padding:2px 7px;background:var(--card2);border-radius:2px">${esc(p.category)}</span>
+        ${linked ? `<span class="stock-link-badge">🔗 ${esc(linked.name)} −${p.stockQtyPerUnit}/vente</span>` : ''}
+        ${p.options.length ? `<div style="margin-top:4px">${p.options.map(o => `<span style="font-size:10px;color:var(--muted2);background:var(--card2);padding:2px 7px;border-radius:2px;margin-right:4px">${esc(o.label)}${o.priceDelta ? ` (${o.priceDelta > 0 ? '+' : ''}${o.priceDelta.toFixed(2)}€)` : ''}</span>`).join('')}</div>` : ''}
       </div>
-    </div>`;
+      <div style="display:flex;align-items:center;gap:12px">
+        <span class="mono" style="font-size:13.5px;color:var(--green)">${fmtEUR(p.price)}</span>
+        <button class="cart-remove-btn" aria-label="${'Supprimer le produit ' + esc(p.name)}" onclick="deleteCaisseProduct('${p.id}')">✕</button>
+      </div>
+    </div>
+  `;
+  }).join('');
 }
 
-function posOptionDraftListHTML() {
-  if (!_posPendingOptions.length) return '';
-  return `<div style="margin-bottom:12px">${_posPendingOptions.map(o => `
-    <div class="pos-draft-row">
-      <span>${esc(o.label)} ${o.priceDelta ? `<span class="mono muted">(${o.priceDelta > 0 ? '+' : ''}${o.priceDelta.toFixed(2)} €)</span>` : ''}</span>
-      <button class="btn-icon" onclick="posRemoveOptionDraft('${o.id}')">✕</button>
-    </div>`).join('')}</div>`;
+function openCaisseProductModal() {
+  if (!guard('caisse.produits.manage')) return;
+  _pendingProductOptions = [];
+  ['cp-name', 'cp-price', 'cp-category', 'cp-option-label', 'cp-option-price'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('cp-stock-item').value = '';
+  document.getElementById('cp-stock-qty').value = '1';
+  renderPendingProductOptions();
+  updateCpCatList();
+  updateCpStockList();
+  document.getElementById('cp-modal-overlay').classList.add('open');
+  setTimeout(() => document.getElementById('cp-name').focus(), 100);
 }
-function posAddOptionDraft() {
-  const labelEl = document.getElementById('pos-opt-label');
-  const priceEl = document.getElementById('pos-opt-price');
-  const label = labelEl.value.trim();
+function closeCaisseProductModal() { document.getElementById('cp-modal-overlay').classList.remove('open'); }
+
+function addCaisseProductOptionDraft() {
+  const label = document.getElementById('cp-option-label').value.trim();
   if (!label) return;
-  const delta = posParseNum(priceEl.value);
-  _posPendingOptions.push({ id: posUid(), label, priceDelta: delta });
-  labelEl.value = ''; priceEl.value = '';
-  document.getElementById('pos-opt-draft-list').innerHTML = posOptionDraftListHTML();
+  const delta = parseFloat(document.getElementById('cp-option-price').value) || 0;
+  _pendingProductOptions.push({ id: 'o' + Date.now() + Math.random().toString(36).slice(2, 6), label, priceDelta: delta });
+  document.getElementById('cp-option-label').value = '';
+  document.getElementById('cp-option-price').value = '';
+  renderPendingProductOptions();
 }
-function posRemoveOptionDraft(id) {
-  _posPendingOptions = _posPendingOptions.filter(o => o.id !== id);
-  document.getElementById('pos-opt-draft-list').innerHTML = posOptionDraftListHTML();
-}
-
-async function posAddProduct() {
-  const name = document.getElementById('pos-new-name').value.trim();
-  const price = posParseNum(document.getElementById('pos-new-price').value);
-  const tvaRate = posParseNum(document.getElementById('pos-new-tva').value);
-  const category = document.getElementById('pos-new-category').value.trim() || 'Sans catégorie';
-  if (!name || price <= 0) { toast('Renseigne un nom et un prix valide.', 'err'); return; }
-  setLoading(true);
-  try {
-    const product = await sbCreatePosProduct(currentResto, { name, price, tvaRate, category, options: _posPendingOptions });
-    _posProducts.push(product);
-    _posPendingOptions = [];
-    document.getElementById('pos-new-name').value = '';
-    document.getElementById('pos-new-price').value = '';
-    document.getElementById('pos-new-category').value = '';
-    document.getElementById('pos-opt-draft-list').innerHTML = '';
-    document.getElementById('pos-catalog-list').innerHTML = posCatalogListHTML();
-    document.getElementById('pos-catalog-count').textContent = `Catalogue (${_posProducts.length})`;
-    toast('Produit ajouté ✓', 'ok');
-  } catch (err) {
-    console.error(err);
-    toast("Erreur lors de l'ajout du produit", 'err');
-  } finally { setLoading(false); }
-}
-
-function posCatalogListHTML() {
-  if (!_posProducts.length) return `<p class="muted" style="font-size:13px">Aucun produit pour le moment.</p>`;
-  return `<div style="display:flex;flex-direction:column;gap:6px">
-    ${_posProducts.map(p => `
-      <div class="pos-catalog-row">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <div>
-            <span style="font-size:13.5px;font-weight:500">${esc(p.name)}</span>
-            <span class="pos-badge-cat">${esc(p.category)}</span>
-            <span class="pos-badge-cat">TVA ${posVatRateLabel(p.tva_rate)}</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:12px">
-            <span class="mono" style="color:var(--pink);font-weight:600">${posFmt(p.price)}</span>
-            ${_posConfirmDeleteProduct === p.id ? `
-              <div style="display:flex;gap:4px">
-                <button class="btn danger-btn" style="padding:4px 8px;font-size:11px" onclick="posDeleteProduct('${p.id}')">Confirmer</button>
-                <button class="btn-cancel" style="padding:4px 8px;font-size:11px" onclick="posSetConfirmDeleteProduct(null)">Annuler</button>
-              </div>` : `<button class="btn-icon del" onclick="posSetConfirmDeleteProduct('${p.id}')">🗑</button>`}
-          </div>
-        </div>
-        ${(p.options || []).length ? `<div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">
-          ${p.options.map(o => `<span class="pos-badge-cat">${esc(o.label)}${o.priceDelta ? ` (${o.priceDelta > 0 ? '+' : ''}${Number(o.priceDelta).toFixed(2)}€)` : ''}</span>`).join('')}
-        </div>` : ''}
-      </div>`).join('')}
-  </div>`;
-}
-function posSetConfirmDeleteProduct(id) { _posConfirmDeleteProduct = id; document.getElementById('pos-catalog-list').innerHTML = posCatalogListHTML(); }
-async function posDeleteProduct(id) {
-  try {
-    await sbDeletePosProduct(id);
-    _posProducts = _posProducts.filter(p => p.id !== id);
-    _posConfirmDeleteProduct = null;
-    document.getElementById('pos-catalog-list').innerHTML = posCatalogListHTML();
-    document.getElementById('pos-catalog-count').textContent = `Catalogue (${_posProducts.length})`;
-    toast('Produit supprimé', 'ok');
-  } catch (err) { toast('Erreur lors de la suppression', 'err'); }
-}
-
-// ═══════════════════════════════════════════════════════════
-//  ONGLET ÉQUIPE (employés de caisse — PIN)
-// ═══════════════════════════════════════════════════════════
-function posEmployeeStats() {
-  const byEmployee = {};
-  _posTickets.forEach(t => {
-    const key = t.employee_name || 'Non attribué';
-    if (!byEmployee[key]) byEmployee[key] = { ca: 0, nb: 0 };
-    byEmployee[key].ca += Number(t.total) || 0;
-    byEmployee[key].nb += 1;
-  });
-  return byEmployee;
-}
-
-function posEquipeHTML() {
-  return `
-    <div class="pos-two-col">
-      <div class="pos-form-card">
-        <h3 class="pos-form-title">Ajouter un employé</h3>
-        <div class="form-field" style="margin-bottom:12px">
-          <label>Nom</label>
-          <input id="pos-emp-name" type="text" placeholder="Ex. Julie">
-        </div>
-        <div class="form-field" style="margin-bottom:12px">
-          <label>Code PIN (4 chiffres)</label>
-          <input id="pos-emp-pin" type="password" inputmode="numeric" maxlength="4" placeholder="1234" oninput="this.value=this.value.replace(/\\D/g,'').slice(0,4)" style="letter-spacing:4px">
-        </div>
-        <div class="form-field" style="margin-bottom:16px">
-          <label>Rôle</label>
-          <select id="pos-emp-role">
-            <option value="caissier">Caissier — caisse, commandes, historique</option>
-            <option value="cuisine">Cuisine — commandes uniquement</option>
-            <option value="gerant">Gérant — accès complet</option>
-          </select>
-        </div>
-        <button class="btn accent" style="width:100%;justify-content:center;padding:11px" onclick="posAddEmployee()">＋ Ajouter</button>
-      </div>
-      <div>
-        <h3 class="pos-form-title" id="pos-emp-count">Équipe (${_posEmployees.length})</h3>
-        <div id="pos-emp-list">${posEmployeeListHTML()}</div>
-      </div>
-    </div>`;
-}
-
-function posEmployeeListHTML() {
-  if (!_posEmployees.length) return `<p class="muted" style="font-size:13px">Aucun employé ajouté.</p>`;
-  const stats = posEmployeeStats();
-  const onlineIds = new Set(_posOnline.map(o => o.employee_id));
-  return `<div style="display:flex;flex-direction:column;gap:6px">
-    ${_posEmployees.map(e => {
-      const s = stats[e.name];
-      const online = onlineIds.has(e.id);
-      return `
-      <div class="pos-catalog-row" style="display:flex;justify-content:space-between;align-items:center">
-        <div style="display:flex;align-items:center;gap:10px">
-          <div style="position:relative">
-            <div class="pos-avatar-sm" style="background:${posAvatarColor(e.name)};width:34px;height:34px;font-size:12px">${esc(posInitials(e.name))}</div>
-            ${online ? '<span class="pos-online-dot" style="position:absolute;bottom:-1px;right:-1px;border:2px solid var(--card)"></span>' : ''}
-          </div>
-          <div>
-            <div style="font-size:13.5px;font-weight:500">${esc(e.name)} <span class="muted" style="font-size:10.5px;font-weight:400">· ${POS_ROLES[e.role] || e.role}</span></div>
-            <div class="muted" style="font-size:11px">${s ? `${s.nb} ticket(s) — ${posFmt(s.ca)}` : 'Aucune vente'}</div>
-          </div>
-        </div>
-        ${_posConfirmDeleteEmployee === e.id ? `
-          <div style="display:flex;gap:4px">
-            <button class="btn danger-btn" style="padding:4px 8px;font-size:11px" onclick="posDeleteEmployee('${e.id}')">Confirmer</button>
-            <button class="btn-cancel" style="padding:4px 8px;font-size:11px" onclick="posSetConfirmDeleteEmployee(null)">Annuler</button>
-          </div>` : `<button class="btn-icon del" onclick="posSetConfirmDeleteEmployee('${e.id}')">🗑</button>`}
-      </div>`;
-    }).join('')}
-  </div>`;
-}
-function posSetConfirmDeleteEmployee(id) { _posConfirmDeleteEmployee = id; document.getElementById('pos-emp-list').innerHTML = posEmployeeListHTML(); }
-
-async function posAddEmployee() {
-  const name = document.getElementById('pos-emp-name').value.trim();
-  const pin  = document.getElementById('pos-emp-pin').value;
-  const role = document.getElementById('pos-emp-role').value;
-  if (!name || pin.length !== 4) { toast('Renseigne un nom et un code PIN à 4 chiffres.', 'err'); return; }
-  setLoading(true);
-  try {
-    const emp = await sbCreatePosEmployee(currentResto, name, pin, role);
-    _posEmployees.push(emp);
-    document.getElementById('pos-emp-name').value = '';
-    document.getElementById('pos-emp-pin').value = '';
-    document.getElementById('pos-emp-role').value = 'caissier';
-    document.getElementById('pos-emp-list').innerHTML = posEmployeeListHTML();
-    document.getElementById('pos-emp-count').textContent = `Équipe (${_posEmployees.length})`;
-    toast('Employé ajouté ✓', 'ok');
-  } catch (err) {
-    console.error(err);
-    toast("Erreur lors de l'ajout de l'employé", 'err');
-  } finally { setLoading(false); }
-}
-async function posDeleteEmployee(id) {
-  try {
-    await sbDeletePosEmployee(id);
-    _posEmployees = _posEmployees.filter(e => e.id !== id);
-    _posConfirmDeleteEmployee = null;
-    if (_posActiveEmployee && _posActiveEmployee.id === id) { posLogout(); return; }
-    document.getElementById('pos-emp-list').innerHTML = posEmployeeListHTML();
-    document.getElementById('pos-emp-count').textContent = `Équipe (${_posEmployees.length})`;
-    toast('Employé supprimé', 'ok');
-  } catch (err) { toast('Erreur lors de la suppression', 'err'); }
-}
-
-// ═══════════════════════════════════════════════════════════
-//  ONGLET HISTORIQUE
-// ═══════════════════════════════════════════════════════════
-function posHistoriqueHTML() {
-  return `
-    <div class="page-header" style="margin-bottom:16px">
-      <div class="ph-left"><h1 style="font-size:22px">HISTORIQUE <em>DES TICKETS</em></h1><p>${_posTickets.length} ticket(s)</p></div>
-      ${_posTickets.length ? `<button class="btn" onclick="posExportCSV()">⬇ Exporter en CSV</button>` : ''}
+function removePendingProductOption(id) { _pendingProductOptions = _pendingProductOptions.filter(o => o.id !== id); renderPendingProductOptions(); }
+function renderPendingProductOptions() {
+  document.getElementById('cp-pending-options').innerHTML = _pendingProductOptions.map(o => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;background:var(--card2);border:1px solid var(--border);border-radius:2px;margin-bottom:4px;font-size:12px">
+      <span style="color:var(--white)">${esc(o.label)} ${o.priceDelta ? `<span class="mono" style="color:var(--muted2)">(${o.priceDelta > 0 ? '+' : ''}${o.priceDelta.toFixed(2)} €)</span>` : ''}</span>
+      <button class="cart-remove-btn" aria-label="Retirer cette option" onclick="removePendingProductOption('${o.id}')">✕</button>
     </div>
-    ${_posTickets.length === 0 ? `<div class="empty-state"><div class="es-icon">🕓</div><p>Aucun ticket encaissé pour le moment.</p></div>` : `
-      <div style="display:flex;flex-direction:column;gap:6px">
-        ${_posTickets.map(t => `
-          <div class="pos-history-row" onclick="posViewTicket('${t.id}')">
-            <div>
-              <div style="font-size:13px;font-weight:500">#${t.number} — ${new Date(t.created_at).toLocaleString('fr-FR')}</div>
-              <div class="muted" style="font-size:11.5px">${t.items.length} article${t.items.length > 1 ? 's' : ''}${t.employee_name ? ` · ${esc(t.employee_name)}` : ''}</div>
-            </div>
-            <div style="display:flex;align-items:center;gap:12px">
-              <span class="status-badge" style="background:var(--card2);color:var(--white)">${esc((t.payment_mode && t.payment_mode.label) || '—')}</span>
-              <span class="mono" style="font-size:14px;font-weight:600">${posFmt(t.total)}</span>
-              <button class="btn-icon" title="Réimprimer le bon cuisine" onclick="event.stopPropagation();posReprintKitchen('${t.id}')">🍳</button>
-            </div>
-          </div>`).join('')}
-      </div>`}
+  `).join('');
+}
+
+async function saveCaisseProduct() {
+  if (!guard('caisse.produits.manage')) return;
+  const name  = document.getElementById('cp-name').value.trim();
+  const price = parseFloat(document.getElementById('cp-price').value);
+  if (!name) { toast('Le nom est obligatoire', 'err'); return; }
+  if (isNaN(price) || price <= 0) { toast('Prix invalide', 'err'); return; }
+  const category = document.getElementById('cp-category').value.trim() || 'Sans catégorie';
+  const stockItemId     = document.getElementById('cp-stock-item').value || null;
+  const stockQtyPerUnit = parseInt(document.getElementById('cp-stock-qty').value, 10) || 1;
+
+  setLoading(true);
+  try {
+    const created = await sbCreateCaisseProduct(currentResto, { name, price, category, options: _pendingProductOptions, stockItemId, stockQtyPerUnit });
+    _caisseProducts.push(created);
+    if (_caisseCache.products[currentResto]) _caisseCache.products[currentResto].push(created);
+    await sbLog('caisse.produit.create', name, { price });
+    toast('Produit ajouté', 'ok');
+    closeCaisseProductModal();
+    renderCaisseProductsList(); renderCaisseCategories(); renderCaisseGrid(); updateCpCatList();
+  } catch (err) { toast('Erreur : ' + err.message, 'err'); }
+  finally { setLoading(false); }
+}
+
+async function deleteCaisseProduct(id) {
+  if (!guard('caisse.produits.manage')) return;
+  if (!confirm('Supprimer ce produit ?')) return;
+  setLoading(true);
+  try {
+    const p = _caisseProducts.find(x => x.id === id);
+    await sbDeleteCaisseProduct(id);
+    _caisseProducts = _caisseProducts.filter(x => x.id !== id);
+    if (_caisseCache.products[currentResto]) _caisseCache.products[currentResto] = _caisseCache.products[currentResto].filter(x => x.id !== id);
+    if (p) await sbLog('caisse.produit.delete', p.name, null);
+    toast('Produit supprimé', 'info');
+    renderCaisseProductsList(); renderCaisseCategories(); renderCaisseGrid();
+  } catch (err) { toast('Erreur : ' + err.message, 'err'); }
+  finally { setLoading(false); }
+}
+
+function renderCaisseModesList() {
+  const icons = { card: '💳', cash: '💵', other: '🎫' };
+  const el = document.getElementById('cp-modes-list');
+  if (_paymentModes.length === 0) { el.innerHTML = '<div class="cart-empty">Aucun mode de paiement.</div>'; return; }
+  el.innerHTML = _paymentModes.map(m => `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--card2);border:1px solid var(--border);border-radius:2px;margin-bottom:6px">
+      <span style="font-size:13px;color:var(--white)">${icons[m.type] || '💳'} ${esc(m.label)}${m.requiresCash ? ' <span style="font-size:10px;color:var(--muted2)">(rendu de monnaie)</span>' : ''}</span>
+      <button class="cart-remove-btn" aria-label="${'Supprimer le mode de paiement ' + esc(m.label)}" onclick="deleteCaissePaymentMode('${m.id}')">✕</button>
+    </div>
+  `).join('');
+}
+
+async function saveCaissePaymentMode() {
+  if (!guard('caisse.produits.manage')) return;
+  const label = document.getElementById('cm-label').value.trim();
+  if (!label) { toast('Le nom est obligatoire', 'err'); return; }
+  const type = document.getElementById('cm-type').value;
+  setLoading(true);
+  try {
+    const created = await sbCreatePaymentMode(currentResto, { label, type });
+    _paymentModes.push(created);
+    if (_caisseCache.modes[currentResto]) _caisseCache.modes[currentResto].push(created);
+    await sbLog('caisse.mode.create', label, null);
+    toast('Mode de paiement ajouté', 'ok');
+    document.getElementById('cm-label').value = '';
+    renderCaisseModesList();
+  } catch (err) { toast('Erreur : ' + err.message, 'err'); }
+  finally { setLoading(false); }
+}
+
+async function deleteCaissePaymentMode(id) {
+  if (!guard('caisse.produits.manage')) return;
+  if (!confirm('Supprimer ce mode de paiement ?')) return;
+  setLoading(true);
+  try {
+    const m = _paymentModes.find(x => x.id === id);
+    await sbDeletePaymentMode(id);
+    _paymentModes = _paymentModes.filter(x => x.id !== id);
+    if (_caisseCache.modes[currentResto]) _caisseCache.modes[currentResto] = _caisseCache.modes[currentResto].filter(x => x.id !== id);
+    if (m) await sbLog('caisse.mode.delete', m.label, null);
+    toast('Mode supprimé', 'info');
+    renderCaisseModesList();
+  } catch (err) { toast('Erreur : ' + err.message, 'err'); }
+  finally { setLoading(false); }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  HISTORIQUE
+// ═══════════════════════════════════════════════════════════
+async function initCaisseHistorique() {
+  if (!currentResto) return;
+  setLoading(true);
+  try {
+    _tickets = await sbGetTickets(currentResto, 90);
+    _closures = await sbGetClosures(currentResto);
+  } catch (err) { toast('Erreur : ' + err.message, 'err'); _tickets = []; _closures = []; }
+  finally { setLoading(false); }
+  renderCaisseHistorique();
+  renderCaisseClosures();
+}
+
+function renderCaisseClosures() {
+  const el = document.getElementById('ch-closures');
+  if (!el) return;
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const alreadyClosedToday = _closures.some(c => c.periodDate === todayStr);
+  el.innerHTML = `
+    <div class="section-title">
+      CLÔTURES ${alreadyClosedToday ? '<small>— journée déjà clôturée aujourd\'hui</small>' : ''}
+    </div>
+    ${_closures.length === 0 ? '<div class="cart-empty cart-empty--block">Aucune clôture émise pour le moment.</div>' : `
+    <div class="closure-list">
+      ${_closures.map(c => `
+        <div class="closure-row">
+          <div>
+            <div class="closure-row-title">${new Date(c.periodDate).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}</div>
+            <div class="closure-row-meta">${c.ticketCount} vente(s)${c.cancellationCount ? `, ${c.cancellationCount} annulation(s)` : ''} · tickets #${c.firstTicketNumber ?? '—'} → #${c.lastTicketNumber ?? '—'} · clôturé par ${esc(c.closedByName || '—')}</div>
+          </div>
+          <div style="text-align:right">
+            <div class="mono closure-row-total">${fmtEUR(c.totalNet)}</div>
+            <div class="mono closure-row-gt">Grand Total : ${fmtEUR(c.grandTotalAfter)}</div>
+          </div>
+        </div>
+      `).join('')}
+    </div>`}
   `;
 }
-function posReprintKitchen(id) {
-  const t = _posTickets.find(x => x.id === id);
-  if (t) posPrintKitchen(t);
-}
-function posViewTicket(id) {
-  const t = _posTickets.find(x => x.id === id);
-  if (!t) return;
-  _posOpenReceiptTicket = t;
-  posShowModal(posReceiptModalHTML(t));
-}
-function posExportCSV() {
-  if (!_posTickets.length) { toast('Aucune donnée à exporter', 'info'); return; }
-  const header = ['Date', 'Employé', 'Articles', 'SousTotal', 'Remise', 'TotalHT', 'TotalTVA', 'Total', 'Paiement'];
-  const rows = _posTickets.map(t => {
-    const vat = posTicketVatBreakdown(t);
-    const totalTva = vat.reduce((s, b) => s + b.tva, 0);
-    const totalHt = Number(t.total) - totalTva;
-    return [
-      new Date(t.created_at).toLocaleString('fr-FR'),
-      t.employee_name || '',
-      t.items.map(i => `${i.name}${i.options && i.options.length ? ' (' + i.options.map(o => o.label).join(', ') + ')' : ''} x${i.qty}`).join(' | '),
-      Number(t.subtotal).toFixed(2),
-      t.discount ? Number(t.discount.amount).toFixed(2) : '0.00',
-      totalHt.toFixed(2),
-      totalTva.toFixed(2),
-      Number(t.total).toFixed(2),
-      (t.payment_mode && t.payment_mode.label) || '',
-    ];
-  }).map(v => v.map(cell => '"' + String(cell).replace(/"/g, '""') + '"'));
-  const csv = [header.map(h => '"' + h + '"')].concat(rows).map(r => r.join(',')).join('\n');
-  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'ventes_' + (typeof _restoSlug === 'function' ? _restoSlug() : 'resto') + '_' + today() + '.csv';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  toast('Export CSV téléchargé ✓', 'ok');
-}
 
-// ═══════════════════════════════════════════════════════════
-//  ONGLET CLÔTURE (ticket Z)
-//  Une clôture couvre tous les tickets encaissés depuis la
-//  précédente (ou depuis l'origine s'il n'y en a aucune).
-// ═══════════════════════════════════════════════════════════
-function posPendingPeriodStart() {
-  return _posClosures.length ? new Date(_posClosures[0].period_end) : new Date(0);
-}
-function posPendingTickets() {
-  const start = posPendingPeriodStart();
-  return _posTickets.filter(t => new Date(t.created_at) > start);
-}
-function posComputePeriodStats(tickets) {
-  const nbTickets = tickets.length;
-  const totalTtc = tickets.reduce((s, t) => s + Number(t.total), 0);
-  const totalDiscount = tickets.reduce((s, t) => s + (t.discount ? Number(t.discount.amount) : 0), 0);
-
-  const vatGroups = {};
-  tickets.forEach(t => {
-    posTicketVatBreakdown(t).forEach(b => {
-      if (!vatGroups[b.rate]) vatGroups[b.rate] = { rate: b.rate, ht: 0, tva: 0, ttc: 0 };
-      vatGroups[b.rate].ht += b.ht;
-      vatGroups[b.rate].tva += b.tva;
-      vatGroups[b.rate].ttc += b.ttc;
-    });
-  });
-  const vatBreakdown = Object.values(vatGroups).sort((a, b) => b.rate - a.rate);
-  const totalTva = vatBreakdown.reduce((s, b) => s + b.tva, 0);
-  const totalHt = totalTtc - totalTva;
-
-  const byPaymentMap = {};
-  tickets.forEach(t => {
-    const label = (t.payment_mode && t.payment_mode.label) || 'Autre';
-    if (!byPaymentMap[label]) byPaymentMap[label] = { label, amount: 0, count: 0 };
-    byPaymentMap[label].amount += Number(t.total);
-    byPaymentMap[label].count += 1;
-  });
-  const byPayment = Object.values(byPaymentMap).sort((a, b) => b.amount - a.amount);
-
-  return { nbTickets, totalTtc, totalHt, totalDiscount, vatBreakdown, byPayment };
-}
-
-function posClotureHTML() {
-  const pendingTickets = posPendingTickets();
-  const s = posComputePeriodStats(pendingTickets);
-  const start = posPendingPeriodStart();
-  const nextNumber = (_posClosures[0] ? _posClosures[0].number : 0) + 1;
-  return `
-    <div class="pos-two-col">
-      <div class="pos-form-card">
-        <h3 class="pos-form-title">Clôture en cours — Ticket Z n°${nextNumber}</h3>
-        <p style="font-size:12px;color:var(--muted2);margin:-10px 0 16px">
-          ${_posClosures.length ? `Depuis la dernière clôture du ${start.toLocaleString('fr-FR')}` : "Depuis l'ouverture de la caisse"} — ${s.nbTickets} ticket${s.nbTickets > 1 ? 's' : ''}
-        </p>
-        <div class="kpi-row" style="grid-template-columns:repeat(2,1fr);margin-bottom:16px">
-          <div class="kpi kb"><div class="kpi-label">CA TTC</div><div class="kpi-value" style="font-size:22px">${posFmt(s.totalTtc)}</div></div>
-          <div class="kpi kp"><div class="kpi-label">Tickets</div><div class="kpi-value" style="font-size:22px">${s.nbTickets}</div></div>
-        </div>
-        ${s.byPayment.length ? `
-          <h4 style="font-size:12px;color:var(--muted2);margin-bottom:6px">PAR MODE DE PAIEMENT</h4>
-          <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:16px">
-            ${s.byPayment.map(p => `<div style="display:flex;justify-content:space-between;font-size:13px"><span>${esc(p.label)} <span class="muted">(${p.count})</span></span><span class="mono">${posFmt(p.amount)}</span></div>`).join('')}
-          </div>` : `<p class="muted" style="font-size:12px;margin-bottom:16px">Aucune vente depuis la dernière clôture.</p>`}
-        ${s.vatBreakdown.length ? `
-          <h4 style="font-size:12px;color:var(--muted2);margin-bottom:6px">TVA</h4>
-          <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:16px">
-            ${s.vatBreakdown.map(b => `<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted2)"><span>TVA ${posVatRateLabel(b.rate)} (HT ${posFmt(b.ht)})</span><span class="mono">${posFmt(b.tva)}</span></div>`).join('')}
-          </div>` : ''}
-        ${s.totalDiscount > 0 ? `<div style="display:flex;justify-content:space-between;font-size:12px;color:var(--red);margin-bottom:16px"><span>Remises accordées</span><span class="mono">-${posFmt(s.totalDiscount)}</span></div>` : ''}
-        <button class="btn accent" style="width:100%;justify-content:center;padding:12px" onclick="posConfirmGenerateZ()">🔒 Clôturer et imprimer le ticket Z</button>
-      </div>
-      <div>
-        <h3 class="pos-form-title" id="pos-closures-count">Historique des clôtures (${_posClosures.length})</h3>
-        <div id="pos-closures-list">${posClosuresListHTML()}</div>
-      </div>
-    </div>`;
-}
-
-function posClosuresListHTML() {
-  if (!_posClosures.length) return `<p class="muted" style="font-size:13px">Aucune clôture pour le moment.</p>`;
-  return `<div style="display:flex;flex-direction:column;gap:6px">
-    ${_posClosures.map(c => `
-      <div class="pos-history-row" style="cursor:default">
-        <div>
-          <div style="font-size:13px;font-weight:500">Z n°${c.number} — ${new Date(c.period_end).toLocaleString('fr-FR')}</div>
-          <div class="muted" style="font-size:11.5px">${c.nb_tickets} ticket${c.nb_tickets > 1 ? 's' : ''}${c.employee_name ? ` · ${esc(c.employee_name)}` : ''}</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:12px">
-          <span class="mono" style="font-size:14px;font-weight:600">${posFmt(c.total_ttc)}</span>
-          <button class="btn-icon" title="Réimprimer le ticket Z" onclick="posReprintClosure('${c.id}')">🖨️</button>
-        </div>
-      </div>`).join('')}
-  </div>`;
-}
-
-function posConfirmGenerateZ() {
-  const s = posComputePeriodStats(posPendingTickets());
-  const nextNumber = (_posClosures[0] ? _posClosures[0].number : 0) + 1;
-  posShowModal(`
-    <div class="modal-overlay open" onclick="if(event.target===this) posCloseModal()">
-      <div class="modal" style="width:340px">
-        <div class="modal-title" style="font-size:18px">Confirmer la clôture Z n°${nextNumber} ?</div>
-        <p style="font-size:13px;color:var(--muted2);margin:8px 0 18px">
-          ${s.nbTickets} ticket${s.nbTickets > 1 ? 's' : ''} pour un total de <b>${posFmt(s.totalTtc)}</b>.
-          Cette clôture sera enregistrée et servira de point de départ pour la suivante.
-        </p>
-        <div style="display:flex;gap:8px">
-          <button class="btn-cancel" style="flex:1;justify-content:center" onclick="posCloseModal()">Annuler</button>
-          <button class="btn accent" style="flex:1;justify-content:center" onclick="posGenerateZReport()">Confirmer</button>
-        </div>
-      </div>
-    </div>`);
-}
-
-async function posGenerateZReport() {
-  const periodStart = posPendingPeriodStart();
-  const periodEnd = new Date();
-  const tickets = posPendingTickets();
-  const s = posComputePeriodStats(tickets);
-  const number = (_posClosures[0] ? _posClosures[0].number : 0) + 1;
-  const draft = {
-    number,
-    periodStart: periodStart.toISOString(),
-    periodEnd: periodEnd.toISOString(),
-    nbTickets: s.nbTickets,
-    totalTtc: s.totalTtc,
-    totalHt: s.totalHt,
-    totalDiscount: s.totalDiscount,
-    vatBreakdown: s.vatBreakdown,
-    byPayment: s.byPayment,
-    employeeName: _posActiveEmployee.name,
-  };
-  posCloseModal();
+async function closeCaisseDay() {
+  if (!guard('caisse.cloture')) return;
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (_closures.some(c => c.periodDate === todayStr)) {
+    toast('La journée est déjà clôturée.', 'err');
+    return;
+  }
+  const nbToday = _tickets.filter(t => t.dateISO.slice(0, 10) === todayStr).length;
+  if (!confirm(`Clôturer la journée du ${new Date().toLocaleDateString('fr-FR')} ? Cette clôture sera définitive et ne pourra plus être modifiée (${nbToday} ticket(s) aujourd'hui).`)) return;
   setLoading(true);
   try {
-    const closure = await sbCreatePosClosure(currentResto, draft);
-    _posClosures = [closure, ..._posClosures];
-    posRenderTab();
-    posPrintZReport(closure);
-    toast('Ticket Z généré ✓', 'ok');
-  } catch (err) {
-    console.error(err);
-    toast('Erreur lors de la génération du ticket Z', 'err');
-  } finally { setLoading(false); }
+    const closure = await sbCreateClosure(currentResto, todayStr, currentUser);
+    _closures.unshift(closure);
+    await sbLog('caisse.cloture', `Clôture du ${todayStr}`, { total: closure.totalNet });
+    toast(`Journée clôturée — ${fmtEUR(closure.totalNet)}`, 'ok');
+    renderCaisseClosures();
+  } catch (err) { toast('Erreur : ' + err.message, 'err'); }
+  finally { setLoading(false); }
 }
 
-function posReprintClosure(id) {
-  const c = _posClosures.find(x => x.id === id);
-  if (c) posPrintZReport(c);
-}
-
-function posPrintZReport(closure) {
-  const resto = (_restos || []).find(r => r.id === currentResto);
-  const shopName = resto ? resto.name : '';
-  const vat = closure.vat_breakdown || [];
-  const byPayment = closure.by_payment || [];
-  const html = `
-    <div class="pos-print-receipt">
-      <div style="text-align:center;margin-bottom:10px">
-        <div style="font-size:15px;font-weight:700">${esc(shopName)}</div>
-        <div style="font-size:13px;font-weight:700;margin:4px 0">TICKET Z n°${closure.number}</div>
-        <div style="font-size:11px">Du ${new Date(closure.period_start).toLocaleString('fr-FR')}</div>
-        <div style="font-size:11px">au ${new Date(closure.period_end).toLocaleString('fr-FR')}</div>
-        ${closure.employee_name ? `<div style="font-size:11px">Clôturé par ${esc(closure.employee_name)}</div>` : ''}
-      </div>
-      <div style="border-top:2px dashed #000;margin:8px 0"></div>
-      <div style="font-size:12px;display:flex;justify-content:space-between"><span>Nombre de tickets</span><span>${closure.nb_tickets}</span></div>
-      <div style="border-top:2px dashed #000;margin:8px 0"></div>
-      <div style="font-size:12px;font-weight:700;margin-bottom:4px">PAR MODE DE PAIEMENT</div>
-      ${byPayment.length ? byPayment.map(p => `<div style="font-size:12px;display:flex;justify-content:space-between"><span>${esc(p.label)} (${p.count})</span><span>${posFmt(p.amount)}</span></div>`).join('') : '<div style="font-size:12px">—</div>'}
-      <div style="border-top:2px dashed #000;margin:8px 0"></div>
-      <div style="font-size:12px;font-weight:700;margin-bottom:4px">TVA</div>
-      ${vat.length ? vat.map(b => `<div style="font-size:11px;display:flex;justify-content:space-between"><span>TVA ${posVatRateLabel(b.rate)} (HT ${posFmt(b.ht)})</span><span>${posFmt(b.tva)}</span></div>`).join('') : '<div style="font-size:12px">—</div>'}
-      <div style="border-top:2px dashed #000;margin:8px 0"></div>
-      ${Number(closure.total_discount) > 0 ? `<div style="font-size:12px;display:flex;justify-content:space-between;color:#a00"><span>Remises accordées</span><span>-${posFmt(closure.total_discount)}</span></div>` : ''}
-      <div style="font-size:12px;display:flex;justify-content:space-between"><span>Total HT</span><span>${posFmt(closure.total_ht)}</span></div>
-      <div style="font-size:14px;font-weight:700;display:flex;justify-content:space-between;margin-top:4px"><span>TOTAL TTC</span><span>${posFmt(closure.total_ttc)}</span></div>
-    </div>`;
-  posPrint(html);
-}
-
-// ═══════════════════════════════════════════════════════════
-//  ONGLET STATISTIQUES
-// ═══════════════════════════════════════════════════════════
-function posComputeStats() {
-  const todayK = posTodayKey();
-  const caTotal = _posTickets.reduce((s, t) => s + Number(t.total), 0);
-  const todayTickets = _posTickets.filter(t => posTodayKey(new Date(t.created_at)) === todayK);
-  const caToday = todayTickets.reduce((s, t) => s + Number(t.total), 0);
-
-  const days = [...Array(7)].map((_, idx) => {
-    const d = new Date(); d.setDate(d.getDate() - (6 - idx));
-    const key = posTodayKey(d);
-    const total = _posTickets.filter(t => posTodayKey(new Date(t.created_at)) === key).reduce((s, t) => s + Number(t.total), 0);
-    return { label: posShortDate(d), total: Math.round(total * 100) / 100 };
-  });
-
-  const qtyByProduct = {};
-  _posTickets.forEach(t => t.items.forEach(i => { qtyByProduct[i.name] = (qtyByProduct[i.name] || 0) + i.qty; }));
-  const top = Object.entries(qtyByProduct).sort((a, b) => b[1] - a[1]).slice(0, 5);
-
-  const employeeStats = Object.entries(posEmployeeStats()).sort((a, b) => b[1].ca - a[1].ca);
-
-  const byPayment = {};
-  _posTickets.forEach(t => { const key = (t.payment_mode && t.payment_mode.label) || 'Autre'; byPayment[key] = (byPayment[key] || 0) + Number(t.total); });
-  const paymentStats = Object.entries(byPayment).map(([name, value]) => ({ name, value: Math.round(value * 100) / 100 }));
-
-  return { caTotal, caToday, nbToday: todayTickets.length, nbTickets: _posTickets.length, days, top, employeeStats, paymentStats };
-}
-
-function posStatsHTML() {
-  const s = posComputeStats();
-  return `
-    <div class="kpi-row">
-      <div class="kpi kb"><div class="kpi-label">CA aujourd'hui</div><div class="kpi-value" style="font-size:28px">${posFmt(s.caToday)}</div></div>
-      <div class="kpi kp"><div class="kpi-label">Tickets aujourd'hui</div><div class="kpi-value" style="font-size:28px">${s.nbToday}</div></div>
-      <div class="kpi ko"><div class="kpi-label">CA total</div><div class="kpi-value" style="font-size:28px">${posFmt(s.caTotal)}</div></div>
-      <div class="kpi ky"><div class="kpi-label">Tickets total</div><div class="kpi-value" style="font-size:28px">${s.nbTickets}</div></div>
-    </div>
-    <div class="charts-row">
-      <div class="chart-card">
-        <div class="chart-card-title">CHIFFRE D'AFFAIRES — 7 DERNIERS JOURS</div>
-        <div style="height:200px"><canvas id="pos-chart-days"></canvas></div>
-      </div>
-      <div class="chart-card">
-        <div class="chart-card-title">RÉPARTITION DES PAIEMENTS</div>
-        ${s.paymentStats.length ? `<div style="height:200px"><canvas id="pos-chart-payments"></canvas></div>` : `<p class="muted" style="font-size:12px">Aucune donnée pour l'instant.</p>`}
-      </div>
-    </div>
-    <div class="pos-two-col">
-      <div class="chart-card">
-        <div class="chart-card-title">PRODUITS LES PLUS VENDUS</div>
-        ${s.top.length === 0 ? `<p class="muted" style="font-size:12px">Aucune vente enregistrée.</p>` : `
-          <div style="display:flex;flex-direction:column;gap:6px">
-            ${s.top.map(([name, qty], i) => `<div class="pos-top-row"><span>${i + 1}. ${esc(name)}</span><span class="mono muted">${qty} vendu${qty > 1 ? 's' : ''}</span></div>`).join('')}
-          </div>`}
-      </div>
-      <div class="chart-card">
-        <div class="chart-card-title">VENTES PAR EMPLOYÉ</div>
-        ${s.employeeStats.length === 0 ? `<p class="muted" style="font-size:12px">Aucune vente enregistrée.</p>` : `
-          <div style="display:flex;flex-direction:column;gap:6px">
-            ${s.employeeStats.map(([name, d]) => `<div class="pos-top-row"><span>${esc(name)}</span><span class="mono muted">${d.nb} tickets — ${posFmt(d.ca)}</span></div>`).join('')}
-          </div>`}
-      </div>
-    </div>`;
-}
-
-const POS_CHART_COLORS = ['#ff2d78', '#4d9fff', '#00e5a0', '#ff8c00', '#ffd600', '#a78bfa'];
-function posRenderCharts() {
-  if (typeof Chart === 'undefined') return;
-  const s = posComputeStats();
-
-  const daysCanvas = document.getElementById('pos-chart-days');
-  if (_posChartDays) { _posChartDays.destroy(); _posChartDays = null; }
-  if (daysCanvas) {
-    _posChartDays = new Chart(daysCanvas.getContext('2d'), {
-      type: 'bar',
-      data: { labels: s.days.map(d => d.label), datasets: [{ data: s.days.map(d => d.total), backgroundColor: '#ff2d78', borderRadius: 4, maxBarThickness: 34 }] },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false }, tooltip: {
-          backgroundColor: '#1c1c1c', borderColor: '#333', borderWidth: 1, titleColor: '#efefef', bodyColor: '#aaa',
-          callbacks: { label: ctx => ' ' + posFmt(ctx.parsed.y) }
-        } },
-        scales: {
-          x: { grid: { display: false }, ticks: { color: '#555', font: { size: 10, family: 'JetBrains Mono, monospace' } } },
-          y: { grid: { color: 'rgba(255,255,255,.05)' }, ticks: { color: '#555', font: { size: 10, family: 'JetBrains Mono, monospace' }, callback: v => v + '€' }, beginAtZero: true },
-        },
-      },
-    });
-  }
-
-  const payCanvas = document.getElementById('pos-chart-payments');
-  if (_posChartPayments) { _posChartPayments.destroy(); _posChartPayments = null; }
-  if (payCanvas && s.paymentStats.length) {
-    _posChartPayments = new Chart(payCanvas.getContext('2d'), {
-      type: 'doughnut',
-      data: {
-        labels: s.paymentStats.map(p => p.name),
-        datasets: [{ data: s.paymentStats.map(p => p.value), backgroundColor: POS_CHART_COLORS, borderColor: '#161616', borderWidth: 2 }],
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: {
-          legend: { position: 'bottom', labels: { color: '#888', font: { size: 11, family: 'DM Sans, sans-serif' }, boxWidth: 10, padding: 14, usePointStyle: true } },
-          tooltip: { backgroundColor: '#1c1c1c', borderColor: '#333', borderWidth: 1, titleColor: '#efefef', bodyColor: '#aaa', callbacks: { label: ctx => ' ' + posFmt(ctx.parsed) } },
-        },
-      },
-    });
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-//  ONGLET RÉGLAGES (modes de paiement + impression)
-// ═══════════════════════════════════════════════════════════
-function posReglagesHTML() {
-  return `
-    <div class="pos-two-col">
-      <div class="pos-form-card">
-        <h3 class="pos-form-title">Nouveau mode de paiement</h3>
-        <div class="form-field" style="margin-bottom:12px">
-          <label>Nom</label>
-          <input id="pos-mode-label" type="text" placeholder="Ex. Chèque">
-        </div>
-        <div class="form-field" style="margin-bottom:16px">
-          <label>Type</label>
-          <select id="pos-mode-type">
-            <option value="card">Carte (sans rendu de monnaie)</option>
-            <option value="cash">Espèces (calcule le rendu)</option>
-            <option value="other">Autre (sans rendu de monnaie)</option>
-          </select>
-        </div>
-        <button class="btn accent" style="width:100%;justify-content:center;padding:11px" onclick="posAddPaymentMode()">＋ Ajouter</button>
-        <div style="margin-top:24px;padding-top:18px;border-top:1px dashed var(--border)">
-          <h4 class="pos-form-title" style="font-size:13px">Impression cuisine</h4>
-          <button class="btn${_posSettings.autoPrintKitchen ? ' green-btn' : ''}" style="width:100%;justify-content:center;padding:10px" onclick="posToggleAutoPrint()">
-            🍳 Impression automatique ${_posSettings.autoPrintKitchen ? 'activée' : 'désactivée'}
-          </button>
-        </div>
-        <div style="margin-top:18px;padding-top:18px;border-top:1px dashed var(--border)">
-          <h4 class="pos-form-title" style="font-size:13px">Largeur du ticket (imprimante thermique)</h4>
-          <p style="font-size:11px;color:var(--muted2);margin:-6px 0 8px">Choisis la largeur de rouleau de ton imprimante de caisse.</p>
-          <div style="display:flex;gap:8px">
-            <button class="btn${Number(_posSettings.receiptWidth) === 58 ? ' green-btn' : ''}" style="flex:1;justify-content:center;padding:10px" onclick="posSetReceiptWidth(58)">58 mm</button>
-            <button class="btn${Number(_posSettings.receiptWidth) !== 58 ? ' green-btn' : ''}" style="flex:1;justify-content:center;padding:10px" onclick="posSetReceiptWidth(80)">80 mm</button>
-          </div>
-        </div>
-      </div>
+function renderCaisseHistorique() {
+  document.getElementById('ch-count').textContent = `${_tickets.length} ticket(s) — 90 derniers jours`;
+  const el = document.getElementById('ch-list');
+  if (_tickets.length === 0) { el.innerHTML = '<div class="cart-empty">Aucun ticket encaissé.</div>'; return; }
+  el.innerHTML = _tickets.map(t => `
+    <div style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:var(--card);border:1px solid ${t.type === 'annulation' ? 'var(--red)' : 'var(--border)'};border-radius:2px;margin-bottom:6px" onclick="viewCaisseTicket('${t.id}')">
       <div>
-        <h3 class="pos-form-title" id="pos-mode-count">Modes de paiement (${_posSettings.paymentModes.length})</h3>
-        <div id="pos-mode-list">${posPaymentModeListHTML()}</div>
+        <div style="font-size:13px;color:var(--white)">#${t.number} — ${new Date(t.dateISO).toLocaleString('fr-FR')} ${t.type === 'annulation' ? '<span style="color:var(--red);font-size:10.5px;border:1px solid var(--red);border-radius:2px;padding:1px 6px;margin-left:6px">AVOIR</span>' : ''}</div>
+        <div style="font-size:11px;color:var(--muted2)">${t.items.length} article(s)${t.employeeName ? ' · ' + esc(t.employeeName) : ''}</div>
       </div>
-    </div>`;
+      <div style="display:flex;align-items:center;gap:12px">
+        <span style="font-size:10.5px;padding:3px 8px;border-radius:2px;background:var(--card2);color:var(--muted2)">${esc(t.paymentMode?.label || '')}</span>
+        <span class="mono" style="font-size:14px;color:${t.total < 0 ? 'var(--red)' : 'var(--green)'}">${fmtEUR(t.total)}</span>
+      </div>
+    </div>
+  `).join('');
 }
-function posPaymentModeListHTML() {
-  return `<div style="display:flex;flex-direction:column;gap:6px">
-    ${_posSettings.paymentModes.map(m => `
-      <div class="pos-catalog-row" style="display:flex;justify-content:space-between;align-items:center">
-        <div style="display:flex;align-items:center;gap:10px;font-size:13.5px">${POS_PAY_ICON[m.type] || '👛'} ${esc(m.label)} ${m.requiresCash ? '<span class="muted" style="font-size:10.5px">(rendu de monnaie)</span>' : ''}</div>
-        ${_posConfirmDeleteMode === m.id ? `
-          <div style="display:flex;gap:4px">
-            <button class="btn danger-btn" style="padding:4px 8px;font-size:11px" onclick="posDeletePaymentMode('${m.id}')">Confirmer</button>
-            <button class="btn-cancel" style="padding:4px 8px;font-size:11px" onclick="posSetConfirmDeleteMode(null)">Annuler</button>
-          </div>` : `<button class="btn-icon del" onclick="posSetConfirmDeleteMode('${m.id}')">🗑</button>`}
-      </div>`).join('')}
-  </div>`;
-}
-function posSetConfirmDeleteMode(id) { _posConfirmDeleteMode = id; document.getElementById('pos-mode-list').innerHTML = posPaymentModeListHTML(); }
-async function posAddPaymentMode() {
-  const label = document.getElementById('pos-mode-label').value.trim();
-  const type  = document.getElementById('pos-mode-type').value;
-  if (!label) { toast('Renseigne un nom pour ce mode de paiement.', 'err'); return; }
-  const mode = { id: posUid(), label, type, requiresCash: type === 'cash' };
-  _posSettings = { ..._posSettings, paymentModes: [..._posSettings.paymentModes, mode] };
-  document.getElementById('pos-mode-label').value = '';
-  document.getElementById('pos-mode-list').innerHTML = posPaymentModeListHTML();
-  document.getElementById('pos-mode-count').textContent = `Modes de paiement (${_posSettings.paymentModes.length})`;
-  try { await sbSavePosSettings(currentResto, _posSettings); toast('Mode de paiement ajouté ✓', 'ok'); }
-  catch (err) { toast('Erreur de sauvegarde', 'err'); }
-}
-async function posDeletePaymentMode(id) {
-  _posSettings = { ..._posSettings, paymentModes: _posSettings.paymentModes.filter(m => m.id !== id) };
-  _posConfirmDeleteMode = null;
-  document.getElementById('pos-mode-list').innerHTML = posPaymentModeListHTML();
-  document.getElementById('pos-mode-count').textContent = `Modes de paiement (${_posSettings.paymentModes.length})`;
-  try { await sbSavePosSettings(currentResto, _posSettings); toast('Mode de paiement supprimé', 'ok'); }
-  catch (err) { toast('Erreur de sauvegarde', 'err'); }
+
+function viewCaisseTicket(id) { const t = _tickets.find(x => x.id === id); if (t) openCaisseReceiptModal(t); }
+
+function exportCaisseCSV() {
+  if (!guard('export.csv')) return;
+  if (_tickets.length === 0) { toast('Aucun ticket à exporter', 'err'); return; }
+  const rows = [['N° ticket', 'Type', 'Date', 'Employé', 'Articles', 'Sous-total', 'Remise', 'Total', 'Paiement', 'Ticket annulé', 'Hash', 'Hash précédent']];
+  _tickets.forEach(t => {
+    rows.push([
+      t.number,
+      t.type === 'annulation' ? 'Avoir' : 'Vente',
+      new Date(t.dateISO).toLocaleString('fr-FR'),
+      t.employeeName || '',
+      t.items.map(i => `${i.name}${i.options?.length ? ' (' + i.options.map(o => o.label).join(', ') + ')' : ''} x${i.qty}`).join(' | '),
+      t.subtotal.toFixed(2),
+      t.discount ? t.discount.amount.toFixed(2) : '0.00',
+      t.total.toFixed(2),
+      t.paymentMode?.label || '',
+      t.cancelsTicketId || '',
+      t.hash || '',
+      t.prevHash || '',
+    ]);
+  });
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `archive-caisse-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  sbLog('export.csv', 'Historique caisse', null);
 }
 
 // ═══════════════════════════════════════════════════════════
-//  MODAL GÉNÉRIQUE (options produit / reçu)
+//  REÇU / TICKET (modale) + EMAIL
 // ═══════════════════════════════════════════════════════════
-function posShowModal(html) {
-  posCloseModal();
-  const wrap = document.createElement('div');
-  wrap.id = 'pos-dynamic-modal';
-  wrap.innerHTML = html;
-  document.body.appendChild(wrap);
+function openCaisseReceiptModal(ticket) {
+  _viewingTicket = ticket;
+  const resto = _restos.find(r => r.id === currentResto);
+  const alreadyCancelled = ticket.type === 'vente' && _tickets.some(t => t.cancelsTicketId === ticket.id);
+  document.getElementById('caisse-receipt-content').innerHTML = `
+    <div style="font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:1px;color:var(--white);margin-bottom:6px">${esc(resto ? resto.name : '')}</div>
+    <div class="mono" style="font-size:11px;color:var(--muted2);margin-bottom:4px">Ticket #${ticket.number} — ${new Date(ticket.dateISO || Date.now()).toLocaleString('fr-FR')}
+      ${ticket.type === 'annulation' ? '<span style="color:var(--red);font-size:10px;border:1px solid var(--red);border-radius:2px;padding:1px 6px;margin-left:6px">AVOIR / ANNULATION</span>' : ''}
+      ${alreadyCancelled ? '<span style="color:var(--muted2);font-size:10px;border:1px solid var(--muted2);border-radius:2px;padding:1px 6px;margin-left:6px">ANNULÉ</span>' : ''}
+    </div>
+    ${ticket.employeeName ? `<div style="font-size:11px;color:var(--muted2);margin-bottom:10px">Vendeur : ${esc(ticket.employeeName)}</div>` : ''}
+    ${ticket.items.map(i => `
+      <div class="receipt-line">
+        <span>${esc(i.name)} × ${i.qty}</span><span class="mono">${fmtEUR(i.unitPrice * i.qty)}</span>
+      </div>
+      ${i.options?.length ? `<div class="receipt-opts">${i.options.map(o => esc(o.label)).join(', ')}</div>` : ''}
+    `).join('')}
+    ${ticket.discount && ticket.type === 'vente' ? `
+      <div class="receipt-line" style="border:none"><span>Sous-total</span><span class="mono">${fmtEUR(ticket.subtotal)}</span></div>
+      <div class="receipt-line" style="border:none;color:var(--red)"><span>Remise</span><span class="mono">-${fmtEUR(ticket.discount.amount)}</span></div>
+    ` : ''}
+    <div class="receipt-total-row"><span>TOTAL</span><span>${fmtEUR(ticket.total)}</span></div>
+    <div class="receipt-meta">Payé par ${esc(ticket.paymentMode?.label || '')}${ticket.paymentMode?.requiresCash ? ` — remis ${fmtEUR(ticket.cashGiven)}, rendu ${fmtEUR(ticket.change)}` : ''}</div>
+    ${ticket.type === 'vente' && !alreadyCancelled ? `
+      <div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--border)">
+        <button class="btn" style="width:100%;color:var(--red);border-color:var(--red)" onclick="cancelCaisseTicket('${ticket.id}')">✕ Annuler ce ticket (émet un avoir)</button>
+        <p style="font-size:10px;color:var(--muted2);margin-top:6px">Un ticket validé ne peut jamais être supprimé ni modifié (loi anti-fraude TVA / NF525). L'annulation crée un ticket compensatoire à montant négatif, lui aussi tracé et inaltérable.</p>
+      </div>
+    ` : ''}
+  `;
+  document.getElementById('caisse-receipt-modal-overlay').classList.add('open');
 }
-function posCloseModal() {
-  const el = document.getElementById('pos-dynamic-modal');
-  if (el) el.remove();
+function closeCaisseReceiptModal() { document.getElementById('caisse-receipt-modal-overlay').classList.remove('open'); }
+
+async function cancelCaisseTicket(id) {
+  const t = _tickets.find(x => x.id === id);
+  if (!t) return;
+  if (!confirm(`Annuler le ticket #${t.number} (${fmtEUR(t.total)}) ? Un ticket d'avoir sera créé, le ticket original reste conservé tel quel.`)) return;
+  setLoading(true);
+  try {
+    const avoir = await sbCancelTicket(currentResto, t, currentUser);
+    _tickets.unshift(avoir);
+    applyLocalStockImpact(avoir, 1);
+    await sbLog('caisse.annulation', `Annulation ticket #${t.number}`, { total: avoir.total });
+    toast(`Ticket #${t.number} annulé — avoir #${avoir.number} émis`, 'ok');
+    closeCaisseReceiptModal();
+    if (document.getElementById('page-caisse-historique')?.classList.contains('active')) renderCaisseHistorique();
+    if (document.getElementById('page-caisse-stats')?.classList.contains('active')) renderCaisseStats();
+  } catch (err) { toast('Erreur : ' + err.message, 'err'); }
+  finally { setLoading(false); }
 }
 
-// ═══════════════════════════════════════════════════════════
-//  REÇU CLIENT (modal + email)
-// ═══════════════════════════════════════════════════════════
-/** Détail TVA d'un ticket enregistré : utilise vat_breakdown s'il existe, sinon le recalcule (anciens tickets). */
-function posTicketVatBreakdown(ticket) {
-  if (ticket.vat_breakdown && ticket.vat_breakdown.length) return ticket.vat_breakdown;
-  return posVatBreakdownFromItems(ticket.items, Number(ticket.subtotal), Number(ticket.total));
-}
-function posReceiptModalHTML(ticket) {
-  const resto = (_restos || []).find(r => r.id === currentResto);
-  const shopName = resto ? resto.name : '';
-  return `
-    <div class="modal-overlay open" onclick="if(event.target===this) posCloseModal()">
-      <div class="modal pos-receipt" style="width:320px;padding:22px 22px 6px">
-        <div style="display:flex;justify-content:flex-end;gap:14px;margin-bottom:8px">
-          <button class="pos-link-btn" onclick="posToggleReceiptEmail()">✉️ Email</button>
-          <button class="pos-link-btn" onclick="posPrintReceipt()">🖨️ Imprimer</button>
-          <button class="btn-icon" onclick="posCloseModal()">✕</button>
-        </div>
-        <div id="pos-receipt-email-block"></div>
-        <div class="modal-title" style="font-size:17px;margin-bottom:6px">${esc(shopName)}</div>
-        <div class="mono muted" style="font-size:11.5px;margin-bottom:4px">Ticket #${ticket.number} — ${new Date(ticket.created_at).toLocaleString('fr-FR')}</div>
-        ${ticket.employee_name ? `<div class="muted" style="font-size:11.5px;margin-bottom:10px">Vendeur : ${esc(ticket.employee_name)}</div>` : ''}
-        ${ticket.items.map(i => `
-          <div style="padding:6px 0;border-bottom:1px dashed var(--border)">
-            <div style="display:flex;justify-content:space-between;font-size:12.5px">
-              <span>${esc(i.name)} × ${i.qty}</span>
-              <span class="mono">${posFmt(i.unitPrice * i.qty)}</span>
-            </div>
-            ${i.options && i.options.length ? `<div class="muted" style="font-size:10.5px">${i.options.map(o => esc(o.label)).join(', ')}</div>` : ''}
-          </div>`).join('')}
-        ${ticket.discount ? `
-          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted2);padding:8px 0 2px"><span>Sous-total</span><span class="mono">${posFmt(ticket.subtotal)}</span></div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--red);padding:2px 0"><span>Remise</span><span class="mono">-${posFmt(ticket.discount.amount)}</span></div>` : ''}
-        ${posTicketVatBreakdown(ticket).map(b => `
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted2);padding:1px 0"><span>dont TVA ${posVatRateLabel(b.rate)}</span><span class="mono">${posFmt(b.tva)}</span></div>`).join('')}
-        <div style="display:flex;justify-content:space-between;padding:12px 0 6px">
-          <span style="font-weight:700;font-size:13.5px">Total</span>
-          <span class="mono" style="font-weight:700;font-size:16px">${posFmt(ticket.total)}</span>
-        </div>
-        <div class="muted" style="font-size:12px;padding-bottom:16px">
-          Payé par ${esc((ticket.payment_mode && ticket.payment_mode.label) || '—')}${ticket.payment_mode && ticket.payment_mode.requiresCash ? ` — remis ${posFmt(ticket.cash_given)}, rendu ${posFmt(ticket.change)}` : ''}
-        </div>
-      </div>
-    </div>`;
-}
-function posToggleReceiptEmail() {
-  const block = document.getElementById('pos-receipt-email-block');
-  if (!block) return;
-  block.innerHTML = block.innerHTML ? '' : `
-    <div style="margin-bottom:12px;background:var(--dark);border:1px solid var(--border);border-radius:6px;padding:10px">
-      <input id="pos-receipt-email" type="email" class="search-input" style="width:100%;margin-bottom:6px" placeholder="client@email.com">
-      <button class="btn accent" style="width:100%;justify-content:center;padding:8px" onclick="posSendReceiptEmail()">Ouvrir dans ma messagerie</button>
-    </div>`;
-}
-function posSendReceiptEmail() {
-  const emailEl = document.getElementById('pos-receipt-email');
-  const email = emailEl ? emailEl.value.trim() : '';
-  const t = _posOpenReceiptTicket;
-  if (!email || !t) return;
-  const resto = (_restos || []).find(r => r.id === currentResto);
-  const shopName = resto ? resto.name : '';
-  const lines = t.items.map(i => `${i.qty} x ${i.name}${i.options && i.options.length ? ' (' + i.options.map(o => o.label).join(', ') + ')' : ''} — ${posFmt(i.unitPrice * i.qty)}`);
+function emailCaisseTicket() {
+  const t = _viewingTicket;
+  if (!t) return;
+  const resto = _restos.find(r => r.id === currentResto);
+  const lines = t.items.map(i => `${i.qty} x ${i.name}${i.options?.length ? ' (' + i.options.map(o => o.label).join(', ') + ')' : ''} — ${fmtEUR(i.unitPrice * i.qty)}`);
   const body = [
-    shopName, `Ticket #${t.number} — ${new Date(t.created_at).toLocaleString('fr-FR')}`, '',
+    resto ? resto.name : '', `Ticket #${t.number} — ${new Date(t.dateISO).toLocaleString('fr-FR')}`, '',
     ...lines, '',
-    t.discount ? `Sous-total : ${posFmt(t.subtotal)}` : null,
-    t.discount ? `Remise : -${posFmt(t.discount.amount)}` : null,
-    ...posTicketVatBreakdown(t).map(b => `dont TVA ${posVatRateLabel(b.rate)} : ${posFmt(b.tva)}`),
-    `Total : ${posFmt(t.total)}`, `Paiement : ${(t.payment_mode && t.payment_mode.label) || ''}`,
-  ].filter(v => v !== null).join('\n');
-  const mailto = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(`Ticket #${t.number} — ${shopName}`)}&body=${encodeURIComponent(body)}`;
+    t.discount ? `Sous-total : ${fmtEUR(t.subtotal)}` : null,
+    t.discount ? `Remise : -${fmtEUR(t.discount.amount)}` : null,
+    `Total : ${fmtEUR(t.total)}`, `Paiement : ${t.paymentMode?.label || ''}`,
+  ].filter(Boolean).join('\n');
+  const mailto = `mailto:?subject=${encodeURIComponent('Ticket #' + t.number + ' — ' + (resto ? resto.name : ''))}&body=${encodeURIComponent(body)}`;
   window.open(mailto, '_blank');
 }
 
-function posPrintReceipt() {
-  const t = _posOpenReceiptTicket;
-  if (!t) return;
-  const resto = (_restos || []).find(r => r.id === currentResto);
-  const shopName = resto ? resto.name : '';
-  const html = `
-    <div class="pos-print-receipt">
-      <div style="text-align:center;margin-bottom:10px">
-        <div style="font-size:15px;font-weight:700">${esc(shopName)}</div>
-        <div style="font-size:12px">Ticket #${t.number}</div>
-        <div style="font-size:12px">${new Date(t.created_at).toLocaleString('fr-FR')}</div>
-      </div>
-      <div style="border-top:2px dashed #000;margin:8px 0"></div>
-      ${t.items.map(i => `<div style="font-size:13px;margin-bottom:4px;display:flex;justify-content:space-between"><span>${i.qty} × ${esc(i.name)}</span><span>${posFmt(i.unitPrice * i.qty)}</span></div>`).join('')}
-      <div style="border-top:2px dashed #000;margin:8px 0"></div>
-      ${posTicketVatBreakdown(t).map(b => `<div style="font-size:11px;display:flex;justify-content:space-between"><span>dont TVA ${posVatRateLabel(b.rate)}</span><span>${posFmt(b.tva)}</span></div>`).join('')}
-      <div style="font-size:14px;font-weight:700;display:flex;justify-content:space-between;margin-top:4px"><span>TOTAL</span><span>${posFmt(t.total)}</span></div>
-      <div style="font-size:11px;margin-top:6px">Payé par ${esc((t.payment_mode && t.payment_mode.label) || '—')}</div>
-    </div>`;
-  posPrint(html);
+// ═══════════════════════════════════════════════════════════
+//  STATISTIQUES
+// ═══════════════════════════════════════════════════════════
+let _csDaysChart = null, _csPaymentChart = null;
+
+async function initCaisseStats() {
+  if (!currentResto) return;
+  setLoading(true);
+  try { _tickets = await sbGetTickets(currentResto, 90); }
+  catch (err) { toast('Erreur : ' + err.message, 'err'); _tickets = []; }
+  finally { setLoading(false); }
+  renderCaisseStats();
 }
 
-// ═══════════════════════════════════════════════════════════
-//  BON DE CUISINE (impression)
-// ═══════════════════════════════════════════════════════════
-function posPrintKitchen(ticket) {
-  const resto = (_restos || []).find(r => r.id === currentResto);
-  const shopName = resto ? resto.name : '';
-  const html = `
-    <div class="pos-print-kitchen">
-      <div style="text-align:center;margin-bottom:10px">
-        <div style="font-size:15px;font-weight:700">${esc(shopName)}</div>
-        <div style="font-size:13px;font-weight:700;margin:4px 0">BON DE CUISINE</div>
-        <div style="font-size:12px">Ticket #${ticket.number}</div>
-        <div style="font-size:12px">${new Date(ticket.created_at).toLocaleString('fr-FR')}</div>
-        ${ticket.employee_name ? `<div style="font-size:12px">Vendeur : ${esc(ticket.employee_name)}</div>` : ''}
-      </div>
-      <div style="border-top:2px dashed #000;margin:8px 0"></div>
-      ${ticket.items.map(i => `
-        <div style="margin-bottom:10px">
-          <div style="font-size:16px;font-weight:700">${i.qty} × ${esc(i.name)}</div>
-          ${(i.options || []).map(o => `<div style="font-size:13px;padding-left:14px">– ${esc(o.label)}</div>`).join('')}
-        </div>`).join('')}
-      <div style="border-top:2px dashed #000;margin:8px 0"></div>
-      <div style="font-size:12px;text-align:center">${ticket.items.reduce((s, i) => s + i.qty, 0)} article(s) au total</div>
-    </div>`;
-  posPrint(html);
+function renderCaisseStats() {
+  const todays  = _tickets.filter(t => isToday(t.dateISO));
+  const caToday = todays.reduce((s, t) => s + t.total, 0);
+  const caTotal = _tickets.reduce((s, t) => s + t.total, 0);
+
+  document.getElementById('cs-ca-today').textContent = fmtEUR(caToday);
+  document.getElementById('cs-nb-today').textContent = todays.length;
+  document.getElementById('cs-ca-total').textContent = fmtEUR(caTotal);
+  document.getElementById('cs-nb-total').textContent = _tickets.length;
+
+  const days = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const key = d.toDateString();
+    const total = _tickets.filter(t => new Date(t.dateISO).toDateString() === key).reduce((s, t) => s + t.total, 0);
+    days.push({ label: d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }), total: Math.round(total * 100) / 100 });
+  }
+  renderCaisseDaysChart(days);
+
+  const byPayment = {};
+  _tickets.forEach(t => { const k = t.paymentMode?.label || 'Autre'; byPayment[k] = (byPayment[k] || 0) + t.total; });
+  renderCaissePaymentChart(byPayment);
+
+  const qtyByProduct = {};
+  _tickets.forEach(t => t.items.forEach(i => { qtyByProduct[i.name] = (qtyByProduct[i.name] || 0) + i.qty; }));
+  const top = Object.entries(qtyByProduct).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  document.getElementById('cs-top-list').innerHTML = top.length ? top.map(([name, qty], i) => `
+    <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <span style="color:var(--white)">${i + 1}. ${esc(name)}</span><span class="mono" style="color:var(--muted2)">${qty} vendu(s)</span>
+    </div>`).join('') : '<div class="cart-empty">Aucune vente enregistrée.</div>';
+
+  const byEmployee = {};
+  _tickets.forEach(t => { const k = t.employeeName || 'Non attribué'; if (!byEmployee[k]) byEmployee[k] = { ca: 0, nb: 0 }; byEmployee[k].ca += t.total; byEmployee[k].nb += 1; });
+  const empArr = Object.entries(byEmployee).sort((a, b) => b[1].ca - a[1].ca);
+  document.getElementById('cs-employee-list').innerHTML = empArr.length ? empArr.map(([name, d]) => `
+    <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <span style="color:var(--white)">${esc(name)}</span><span class="mono" style="color:var(--muted2)">${d.nb} tickets — ${fmtEUR(d.ca)}</span>
+    </div>`).join('') : '<div class="cart-empty">Aucune vente enregistrée.</div>';
 }
 
-function posPrint(html) {
-  const area = document.getElementById('pos-print-area');
-  if (!area) { window.print(); return; }
-  area.innerHTML = html;
-  area.className = 'pos-print-area ' + (Number(_posSettings.receiptWidth) === 58 ? 'pos-w58' : 'pos-w80');
-  document.body.classList.add('pos-printing');
-  let done = false;
-  const cleanup = () => {
-    if (done) return;
-    done = true;
-    document.body.classList.remove('pos-printing');
-    area.innerHTML = '';
-    window.removeEventListener('afterprint', cleanup);
-  };
-  window.addEventListener('afterprint', cleanup);
-  // Filet de sécurité : si l'évènement afterprint ne se déclenche pas
-  // (annulation rapide, navigateur non standard…), on ne bloque pas l'app.
-  setTimeout(cleanup, 8000);
-  setTimeout(() => window.print(), 100);
+function renderCaisseDaysChart(days) {
+  const canvas = document.getElementById('cs-days-canvas');
+  if (!canvas || typeof Chart === 'undefined') return;
+  if (_csDaysChart) _csDaysChart.destroy();
+  _csDaysChart = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: { labels: days.map(d => d.label), datasets: [{ data: days.map(d => d.total), backgroundColor: '#ff2d78', borderRadius: 3 }] },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: '#888' } },
+        y: { grid: { color: '#252525' }, ticks: { color: '#888' } },
+      },
+    },
+  });
+}
+
+function renderCaissePaymentChart(byPayment) {
+  const canvas = document.getElementById('cs-payment-canvas');
+  if (!canvas || typeof Chart === 'undefined') return;
+  if (_csPaymentChart) _csPaymentChart.destroy();
+  const labels = Object.keys(byPayment);
+  const colors = ['#ff2d78', '#4d9fff', '#00e5a0', '#ffd600', '#ff8c00', '#a78bfa'];
+  _csPaymentChart = new Chart(canvas.getContext('2d'), {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data: Object.values(byPayment), backgroundColor: labels.map((_, i) => colors[i % colors.length]) }] },
+    options: { plugins: { legend: { position: 'bottom', labels: { color: '#efefef', font: { size: 11 } } } } },
+  });
 }
