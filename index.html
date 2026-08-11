@@ -24,20 +24,16 @@
     <div class="login-logo">TASTY <span>STOCK</span></div>
     <div class="login-sub">Gestion de stock — Multi-sites</div>
     <div class="field">
-      <label>Identifiant</label>
+      <label for="li-user">Identifiant</label>
       <input id="li-user" type="text" placeholder="identifiant" autocomplete="username">
     </div>
     <div class="field">
-      <label>Mot de passe</label>
+      <label for="li-pass">Mot de passe</label>
       <input id="li-pass" type="password" placeholder="••••••••" autocomplete="current-password">
     </div>
     <button class="btn-primary" onclick="doLogin()">CONNEXION →</button>
     <div class="login-err" id="login-err"></div>
-    <div class="field">
-    <h5 style="color: rgb(62, 62, 62); text-align: center;">
-      TastyStock - v1 2026 ©
-    </h5>
-  </div>
+    <p class="login-footer">TastyStock - v1 2026 ©</p>
   </div>
 </div>
 
@@ -195,7 +191,7 @@
       <div id="dash-recent"></div>
 
       <!-- ── GRAPHIQUE FLUX ── -->
-      <div class="sec-title" style="margin-top:28px">Variations de flux par catégorie</div>
+      <div class="sec-title sec-title--spaced">Variations de flux par catégorie</div>
       <div class="flux-chart-card">
         <div class="flux-controls">
           <div class="flux-period-group">
@@ -303,7 +299,7 @@
           </div>
           <div class="caisse-payment-modes" id="caisse-payment-modes"></div>
           <div id="caisse-cash-section" class="caisse-cash-section" style="display:none">
-            <input class="search-input" id="caisse-cash-given" type="number" min="0" placeholder="Montant remis (€)" oninput="renderCartSummary()" style="width:100%">
+            <input class="search-input w-full" id="caisse-cash-given" type="number" min="0" placeholder="Montant remis (€)" oninput="renderCartSummary()">
             <div class="caisse-bills" id="caisse-bills"></div>
             <div class="caisse-change" id="caisse-change"></div>
           </div>
@@ -328,24 +324,24 @@
       </div>
       <div id="cp-products-list"></div>
 
-      <div class="sec-title" style="margin-top:28px">Modes de paiement</div>
+      <div class="sec-title sec-title--spaced">Modes de paiement</div>
       <div class="transfer-layout">
         <div class="transfer-panel">
           <div class="tp-title">NOUVEAU MODE</div>
           <div class="transfer-form">
             <div class="form-field">
               <label>Nom</label>
-              <input class="search-input" id="cm-label" type="text" placeholder="Ex: Chèque" style="width:100%">
+              <input class="search-input w-full" id="cm-label" type="text" placeholder="Ex: Chèque">
             </div>
             <div class="form-field">
               <label>Type</label>
-              <select class="select-input" id="cm-type" style="width:100%">
+              <select class="select-input w-full" id="cm-type">
                 <option value="card">Carte (sans rendu)</option>
                 <option value="cash">Espèces (calcule le rendu)</option>
                 <option value="other">Autre (sans rendu)</option>
               </select>
             </div>
-            <button class="btn green-btn" style="width:100%;justify-content:center;padding:12px" onclick="saveCaissePaymentMode()">AJOUTER →</button>
+            <button class="btn green-btn btn--block" onclick="saveCaissePaymentMode()">AJOUTER →</button>
           </div>
         </div>
         <div class="transfer-panel">
@@ -412,21 +408,21 @@
           <div class="transfer-form">
             <div class="form-field">
               <label>De</label>
-              <select class="select-input" id="tr-from" style="width:100%" onchange="loadTransferItems()"></select>
+              <select class="select-input w-full" id="tr-from" onchange="loadTransferItems()"></select>
             </div>
             <div class="form-field">
               <label>Vers</label>
-              <select class="select-input" id="tr-to" style="width:100%"></select>
+              <select class="select-input w-full" id="tr-to"></select>
             </div>
             <div class="form-field">
               <label>Référence</label>
-              <select class="select-input" id="tr-item" style="width:100%"><option>— Sélectionner —</option></select>
+              <select class="select-input w-full" id="tr-item"><option>— Sélectionner —</option></select>
             </div>
             <div class="form-field">
               <label>Quantité</label>
               <input type="number" min="1" id="tr-qty" class="search-input" placeholder="Ex: 5" style="flex:none">
             </div>
-            <button class="btn green-btn" style="width:100%;justify-content:center;padding:12px" onclick="doTransfer()">CONFIRMER LE TRANSFERT →</button>
+            <button class="btn green-btn btn--block" onclick="doTransfer()">CONFIRMER LE TRANSFERT →</button>
           </div>
         </div>
         <div class="transfer-panel">

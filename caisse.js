@@ -605,14 +605,14 @@ function renderCaisseHistorique() {
   const el = document.getElementById('ch-list');
   if (_tickets.length === 0) { el.innerHTML = '<div class="cart-empty">Aucun ticket encaissé.</div>'; return; }
   el.innerHTML = _tickets.map(t => `
-    <div style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:11px 14px;background:var(--card);border:1px solid ${t.type === 'annulation' ? 'var(--red)' : 'var(--border)'};border-radius:2px;margin-bottom:6px" onclick="viewCaisseTicket('${t.id}')">
+    <div class="history-row${t.type === 'annulation' ? ' history-row--avoir' : ''}" onclick="viewCaisseTicket('${t.id}')">
       <div>
-        <div style="font-size:13px;color:var(--white)">#${t.number} — ${new Date(t.dateISO).toLocaleString('fr-FR')} ${t.type === 'annulation' ? '<span style="color:var(--red);font-size:10.5px;border:1px solid var(--red);border-radius:2px;padding:1px 6px;margin-left:6px">AVOIR</span>' : ''}</div>
-        <div style="font-size:11px;color:var(--muted2)">${t.items.length} article(s)${t.employeeName ? ' · ' + esc(t.employeeName) : ''}</div>
+        <div class="history-row-title">#${t.number} — ${new Date(t.dateISO).toLocaleString('fr-FR')} ${t.type === 'annulation' ? '<span class="avoir-badge">AVOIR</span>' : ''}</div>
+        <div class="history-row-meta">${t.items.length} article(s)${t.employeeName ? ' · ' + esc(t.employeeName) : ''}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:12px">
-        <span style="font-size:10.5px;padding:3px 8px;border-radius:2px;background:var(--card2);color:var(--muted2)">${esc(t.paymentMode?.label || '')}</span>
-        <span class="mono" style="font-size:14px;color:${t.total < 0 ? 'var(--red)' : 'var(--green)'}">${fmtEUR(t.total)}</span>
+      <div class="history-row-right">
+        <span class="history-row-mode">${esc(t.paymentMode?.label || '')}</span>
+        <span class="mono history-row-total ${t.total < 0 ? 'red' : 'green'}">${fmtEUR(t.total)}</span>
       </div>
     </div>
   `).join('');
@@ -656,12 +656,12 @@ function openCaisseReceiptModal(ticket) {
   const resto = _restos.find(r => r.id === currentResto);
   const alreadyCancelled = ticket.type === 'vente' && _tickets.some(t => t.cancelsTicketId === ticket.id);
   document.getElementById('caisse-receipt-content').innerHTML = `
-    <div style="font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:1px;color:var(--white);margin-bottom:6px">${esc(resto ? resto.name : '')}</div>
-    <div class="mono" style="font-size:11px;color:var(--muted2);margin-bottom:4px">Ticket #${ticket.number} — ${new Date(ticket.dateISO || Date.now()).toLocaleString('fr-FR')}
-      ${ticket.type === 'annulation' ? '<span style="color:var(--red);font-size:10px;border:1px solid var(--red);border-radius:2px;padding:1px 6px;margin-left:6px">AVOIR / ANNULATION</span>' : ''}
-      ${alreadyCancelled ? '<span style="color:var(--muted2);font-size:10px;border:1px solid var(--muted2);border-radius:2px;padding:1px 6px;margin-left:6px">ANNULÉ</span>' : ''}
+    <div class="receipt-shop-name">${esc(resto ? resto.name : '')}</div>
+    <div class="mono receipt-ticket-id">Ticket #${ticket.number} — ${new Date(ticket.dateISO || Date.now()).toLocaleString('fr-FR')}
+      ${ticket.type === 'annulation' ? '<span class="receipt-badge receipt-badge--red">AVOIR / ANNULATION</span>' : ''}
+      ${alreadyCancelled ? '<span class="receipt-badge receipt-badge--muted">ANNULÉ</span>' : ''}
     </div>
-    ${ticket.employeeName ? `<div style="font-size:11px;color:var(--muted2);margin-bottom:10px">Vendeur : ${esc(ticket.employeeName)}</div>` : ''}
+    ${ticket.employeeName ? `<div class="receipt-employee">Vendeur : ${esc(ticket.employeeName)}</div>` : ''}
     ${ticket.items.map(i => `
       <div class="receipt-line">
         <span>${esc(i.name)} × ${i.qty}</span><span class="mono">${fmtEUR(i.unitPrice * i.qty)}</span>
@@ -669,15 +669,15 @@ function openCaisseReceiptModal(ticket) {
       ${i.options?.length ? `<div class="receipt-opts">${i.options.map(o => esc(o.label)).join(', ')}</div>` : ''}
     `).join('')}
     ${ticket.discount && ticket.type === 'vente' ? `
-      <div class="receipt-line" style="border:none"><span>Sous-total</span><span class="mono">${fmtEUR(ticket.subtotal)}</span></div>
-      <div class="receipt-line" style="border:none;color:var(--red)"><span>Remise</span><span class="mono">-${fmtEUR(ticket.discount.amount)}</span></div>
+      <div class="receipt-line receipt-line--plain"><span>Sous-total</span><span class="mono">${fmtEUR(ticket.subtotal)}</span></div>
+      <div class="receipt-line receipt-line--plain red"><span>Remise</span><span class="mono">-${fmtEUR(ticket.discount.amount)}</span></div>
     ` : ''}
     <div class="receipt-total-row"><span>TOTAL</span><span>${fmtEUR(ticket.total)}</span></div>
     <div class="receipt-meta">Payé par ${esc(ticket.paymentMode?.label || '')}${ticket.paymentMode?.requiresCash ? ` — remis ${fmtEUR(ticket.cashGiven)}, rendu ${fmtEUR(ticket.change)}` : ''}</div>
     ${ticket.type === 'vente' && !alreadyCancelled ? `
-      <div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--border)">
-        <button class="btn" style="width:100%;color:var(--red);border-color:var(--red)" onclick="cancelCaisseTicket('${ticket.id}')">✕ Annuler ce ticket (émet un avoir)</button>
-        <p style="font-size:10px;color:var(--muted2);margin-top:6px">Un ticket validé ne peut jamais être supprimé ni modifié (loi anti-fraude TVA / NF525). L'annulation crée un ticket compensatoire à montant négatif, lui aussi tracé et inaltérable.</p>
+      <div class="receipt-cancel-block">
+        <button class="btn btn--block btn--red-outline" onclick="cancelCaisseTicket('${ticket.id}')">✕ Annuler ce ticket (émet un avoir)</button>
+        <p class="receipt-cancel-note">Un ticket validé ne peut jamais être supprimé ni modifié (loi anti-fraude TVA / NF525). L'annulation crée un ticket compensatoire à montant négatif, lui aussi tracé et inaltérable.</p>
       </div>
     ` : ''}
   `;
@@ -760,16 +760,16 @@ function renderCaisseStats() {
   _tickets.forEach(t => t.items.forEach(i => { qtyByProduct[i.name] = (qtyByProduct[i.name] || 0) + i.qty; }));
   const top = Object.entries(qtyByProduct).sort((a, b) => b[1] - a[1]).slice(0, 5);
   document.getElementById('cs-top-list').innerHTML = top.length ? top.map(([name, qty], i) => `
-    <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px">
-      <span style="color:var(--white)">${i + 1}. ${esc(name)}</span><span class="mono" style="color:var(--muted2)">${qty} vendu(s)</span>
+    <div class="stat-row">
+      <span>${i + 1}. ${esc(name)}</span><span class="mono">${qty} vendu(s)</span>
     </div>`).join('') : '<div class="cart-empty">Aucune vente enregistrée.</div>';
 
   const byEmployee = {};
   _tickets.forEach(t => { const k = t.employeeName || 'Non attribué'; if (!byEmployee[k]) byEmployee[k] = { ca: 0, nb: 0 }; byEmployee[k].ca += t.total; byEmployee[k].nb += 1; });
   const empArr = Object.entries(byEmployee).sort((a, b) => b[1].ca - a[1].ca);
   document.getElementById('cs-employee-list').innerHTML = empArr.length ? empArr.map(([name, d]) => `
-    <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:13px">
-      <span style="color:var(--white)">${esc(name)}</span><span class="mono" style="color:var(--muted2)">${d.nb} tickets — ${fmtEUR(d.ca)}</span>
+    <div class="stat-row">
+      <span>${esc(name)}</span><span class="mono">${d.nb} tickets — ${fmtEUR(d.ca)}</span>
     </div>`).join('') : '<div class="cart-empty">Aucune vente enregistrée.</div>';
 }
 

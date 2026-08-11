@@ -727,10 +727,10 @@ function checkDuplicate() {
             (${best.item.category || '—'}, qté: ${best.item.qty}).
           </div>
           <div class="dup-actions">
-            <button class="btn" style="font-size:11px" onclick="openModal('edit','${best.item.id}');return false">
+            <button class="btn btn--sm" onclick="openModal('edit','${best.item.id}');return false">
               ✏️ Modifier cet article
             </button>
-            <button class="btn" style="font-size:11px" onclick="dismissDuplicate()">
+            <button class="btn btn--sm" onclick="dismissDuplicate()">
               Créer quand même
             </button>
           </div>
@@ -950,7 +950,7 @@ async function initTransferts() {
   // Vérif permission d'accès
   if (!can('transferts.view')) {
     document.getElementById('page-transferts').innerHTML =
-      `<div class="empty-state" style="padding:80px"><div class="es-icon">🔒</div><p>Accès réservé aux Gérants et Administrateurs</p></div>`;
+      `<div class="empty-state empty-state--large"><div class="es-icon">🔒</div><p>Accès réservé aux Gérants et Administrateurs</p></div>`;
     return;
   }
   populateTransferSelects(); loadTransferItems();
@@ -1002,7 +1002,7 @@ async function doTransfer() {
 function renderTransferHistory() {
   const list = document.getElementById('transfer-history-list');
   if (!_transfers.length) {
-    list.innerHTML = `<div class="empty-state" style="padding:30px 0"><div class="es-icon">📭</div><p>Aucun transfert</p></div>`;
+    list.innerHTML = `<div class="empty-state empty-state--compact"><div class="es-icon">📭</div><p>Aucun transfert</p></div>`;
     return;
   }
   list.innerHTML = _transfers.slice(0,25).map(t => `
@@ -1047,29 +1047,29 @@ function renderComparaison(all) {
   const grid = cards.map(({r,stock,vol,alerts,dlc,color})=>`
     <div class="compare-card">
       <div class="compare-card-title" style="color:${color}">${esc(r.name)}</div>
-      <div style="font-size:10px;color:var(--muted2);letter-spacing:1px;margin-bottom:14px">📍 ${esc(r.location)}</div>
+      <div class="compare-card-location">📍 ${esc(r.location)}</div>
       <div class="cmp-stat"><div class="cmp-label">Volume total</div><div class="cmp-value">${vol.toLocaleString('fr-FR')}</div></div>
-      <div class="cmp-stat"><div class="cmp-label">Références</div><div class="cmp-value" style="font-size:18px">${stock.length}</div></div>
-      <div class="cmp-stat"><div class="cmp-label">Alertes</div><div class="cmp-value" style="font-size:18px;color:${alerts>0?'var(--pink)':'var(--green)'}">${alerts}</div></div>
-      <div class="cmp-stat"><div class="cmp-label">DLC ≤ 3j</div><div class="cmp-value" style="font-size:18px;color:${dlc>0?'var(--orange)':'var(--muted2)'}">${dlc}</div></div>
+      <div class="cmp-stat"><div class="cmp-label">Références</div><div class="cmp-value cmp-value--sm">${stock.length}</div></div>
+      <div class="cmp-stat"><div class="cmp-label">Alertes</div><div class="cmp-value cmp-value--sm" style="color:${alerts>0?'var(--pink)':'var(--green)'}">${alerts}</div></div>
+      <div class="cmp-stat"><div class="cmp-label">DLC ≤ 3j</div><div class="cmp-value cmp-value--sm" style="color:${dlc>0?'var(--orange)':'var(--muted2)'}">${dlc}</div></div>
     </div>`).join('');
   const maxVol = Math.max(...cards.map(c=>c.vol))||1;
   const bars = cards.map(({r,vol,color})=>{
     const pct = Math.round(vol/maxVol*100);
-    return `<div style="margin-bottom:16px">
-      <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-        <span style="font-size:12px;font-weight:500">${esc(r.name)}</span>
-        <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--muted2)">${vol.toLocaleString('fr-FR')}</span>
+    return `<div class="cmp-bar-row">
+      <div class="cmp-bar-head">
+        <span class="cmp-bar-name">${esc(r.name)}</span>
+        <span class="cmp-bar-vol">${vol.toLocaleString('fr-FR')}</span>
       </div>
-      <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
-        <div style="height:100%;width:${pct}%;background:${color};border-radius:3px;transition:width 1s ease"></div>
+      <div class="cmp-bar-track">
+        <div class="cmp-bar-fill" style="width:${pct}%;background:${color}"></div>
       </div>
     </div>`;}).join('');
   content.innerHTML = `
     <div class="sec-title">Vue par restaurant</div>
     <div class="compare-grid">${grid}</div>
     <div class="sec-title">Volumes comparés</div>
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:3px;padding:26px">${bars}</div>`;
+    <div class="cmp-bars-panel">${bars}</div>`;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1078,7 +1078,7 @@ function renderComparaison(all) {
 async function initUsers() {
   if (!can('utilisateurs.view')) {
     document.getElementById('page-utilisateurs').innerHTML =
-      `<div class="empty-state" style="padding:80px"><div class="es-icon">🔒</div><p>Accès réservé aux Administrateurs</p></div>`;
+      `<div class="empty-state empty-state--large"><div class="es-icon">🔒</div><p>Accès réservé aux Administrateurs</p></div>`;
     return;
   }
   setLoading(true);
@@ -1106,20 +1106,20 @@ function renderUsers() {
       const isMe = u.id === currentUser.id;
       // Actions selon permissions
       const editBtn = can('user.edit')
-        ? `<button class="btn-icon" onclick="openUserModal('${u.id}')">✏️</button>` : '';
+        ? `<button class="btn-icon" aria-label="${'Modifier ' + esc(u.name)}" onclick="openUserModal('${u.id}')">✏️</button>` : '';
       const delBtn  = can('user.delete') && !isMe
-        ? `<button class="btn-icon del" onclick="deleteUser('${u.id}')">🗑</button>` : '';
-      const meTag   = isMe ? `<span style="font-size:10px;color:var(--muted);padding:5px 9px">vous</span>` : '';
+        ? `<button class="btn-icon del" aria-label="${'Supprimer ' + esc(u.name)}" onclick="deleteUser('${u.id}')">🗑</button>` : '';
+      const meTag   = isMe ? `<span class="uri-me-tag">vous</span>` : '';
 
       return `<div class="user-row-item">
         <div class="uri-avatar" style="background:${avatarColors[i%avatarColors.length]}">${u.name[0].toUpperCase()}</div>
         <div class="uri-info">
           <div class="uri-name">${esc(u.name)} ${roleBadgeHTML(u.role)}</div>
-          <div class="uri-username" style="font-size:10px;color:var(--muted);margin-top:3px">
+          <div class="uri-username">
             Membre depuis ${new Date(u.created_at).toLocaleDateString('fr-FR')}
           </div>
         </div>
-        <div style="display:flex;gap:8px;margin-left:12px;align-items:center">
+        <div class="uri-actions">
           ${editBtn}${delBtn}${meTag}
         </div>
       </div>`;
@@ -1206,7 +1206,7 @@ async function deleteUser(id) {
 async function initRestosAdmin() {
   if (!can('restaurants.view')) {
     document.getElementById('page-restaurants').innerHTML =
-      `<div class="empty-state" style="padding:80px"><div class="es-icon">🔒</div><p>Accès réservé aux Administrateurs</p></div>`;
+      `<div class="empty-state empty-state--large"><div class="es-icon">🔒</div><p>Accès réservé aux Administrateurs</p></div>`;
     return;
   }
   setLoading(true);
@@ -1230,9 +1230,9 @@ function renderRestosAdmin() {
     ${_restos.map((r,i) => {
       const hex = (COLOR_MAP[r.color]||COLOR_MAP.pink).hex;
       const editBtn = can('restaurant.edit')
-        ? `<button class="btn" style="font-size:11px" onclick="openRestoModal('${r.id}')">✏️ Modifier</button>` : '';
+        ? `<button class="btn btn--sm" onclick="openRestoModal('${r.id}')">✏️ Modifier</button>` : '';
       const delBtn  = can('restaurant.delete') && _restos.length>1
-        ? `<button class="btn danger-btn" style="font-size:11px" onclick="deleteResto('${r.id}')">🗑 Supprimer</button>` : '';
+        ? `<button class="btn danger-btn btn--sm" onclick="deleteResto('${r.id}')">🗑 Supprimer</button>` : '';
       return `<div class="resto-admin-card">
         <div class="rac-num" style="color:${hex}">${String(i+1).padStart(2,'0')}</div>
         <div class="rac-name">${esc(r.name)}</div>
@@ -1413,7 +1413,7 @@ const LOGS_PER_PAGE = 50;
 async function initLogs() {
   if (!can('utilisateurs.view')) {
     document.getElementById('page-logs').innerHTML =
-      `<div class="empty-state" style="padding:80px"><div class="es-icon">🔒</div><p>Accès réservé aux Administrateurs</p></div>`;
+      `<div class="empty-state empty-state--large"><div class="es-icon">🔒</div><p>Accès réservé aux Administrateurs</p></div>`;
     return;
   }
   _logsPage = 1;
@@ -1558,10 +1558,10 @@ renderUsers = function() {
       }
 
       const editBtn = can('user.edit')
-        ? `<button class="btn-icon" onclick="openUserModal('${u.id}')">✏️</button>` : '';
+        ? `<button class="btn-icon" aria-label="${'Modifier ' + esc(u.name)}" onclick="openUserModal('${u.id}')">✏️</button>` : '';
       const delBtn  = can('user.delete') && !isMe
-        ? `<button class="btn-icon del" onclick="deleteUser('${u.id}')">🗑</button>` : '';
-      const meTag   = isMe ? `<span style="font-size:10px;color:var(--muted);padding:5px 9px">vous</span>` : '';
+        ? `<button class="btn-icon del" aria-label="${'Supprimer ' + esc(u.name)}" onclick="deleteUser('${u.id}')">🗑</button>` : '';
+      const meTag   = isMe ? `<span class="uri-me-tag">vous</span>` : '';
 
       return `<div class="user-row-item">
         <div class="uri-avatar-wrap">
@@ -1571,14 +1571,14 @@ renderUsers = function() {
         <div class="uri-info">
           <div class="uri-name">
             ${esc(u.name)} ${roleBadgeHTML(u.role)}
-            ${isOnline ? `<span style="font-size:9px;color:var(--green);margin-left:6px;letter-spacing:1px">● EN LIGNE</span>` : ''}
+            ${isOnline ? `<span class="uri-online-badge">● EN LIGNE</span>` : ''}
           </div>
-          <div class="uri-username" style="font-size:10px;color:var(--muted);margin-top:3px">
+          <div class="uri-username">
             🕐 Dernière connexion : ${lastSeenStr}
             ${presence && presence.resto_name ? ` · ${esc(presence.resto_name)}` : ''}
           </div>
         </div>
-        <div style="display:flex;gap:8px;margin-left:12px;align-items:center">
+        <div class="uri-actions">
           ${editBtn}${delBtn}${meTag}
         </div>
       </div>`;
@@ -1624,7 +1624,7 @@ function renderProfil() {
           <div class="profil-avatar" style="background:${avatarColors[colorIdx]}" id="profil-avatar-display">
             ${currentUser.name[0].toUpperCase()}
           </div>
-          <div class="online-dot" style="width:12px;height:12px;border-width:2px"></div>
+          <div class="online-dot online-dot--lg"></div>
         </div>
         <div class="profil-name" id="profil-name-display">${esc(currentUser.name)}</div>
         <div class="profil-role-badge">${roleBadgeHTML(currentUser.role)}</div>
