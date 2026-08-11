@@ -297,12 +297,14 @@
             <div class="ct-row ct-discount" id="cart-discount-row" style="display:none"><span>Remise</span><span id="cart-discount-amount">-0,00 €</span></div>
             <div class="ct-row ct-total"><span>TOTAL</span><span id="cart-total">0,00 €</span></div>
           </div>
+          <div class="caisse-split-toggle" id="caisse-split-toggle"></div>
           <div class="caisse-payment-modes" id="caisse-payment-modes"></div>
           <div id="caisse-cash-section" class="caisse-cash-section" style="display:none">
             <input class="search-input w-full" id="caisse-cash-given" type="number" min="0" placeholder="Montant remis (€)" oninput="renderCartSummary()">
             <div class="caisse-bills" id="caisse-bills"></div>
             <div class="caisse-change" id="caisse-change"></div>
           </div>
+          <div id="caisse-split-section" class="caisse-split-section" style="display:none"></div>
           <button class="btn-save" id="caisse-validate-btn" style="width:100%;justify-content:center;padding:14px;opacity:.4" onclick="validateCaisseTicket()">VALIDER LE TICKET →</button>
         </div>
       </div>

@@ -552,6 +552,10 @@ function normalizeTicket(row) {
     cancelsTicketId: row.cancels_ticket_id || null,
     hash:            row.hash,
     prevHash:        row.prev_hash,
+    // Détail des lignes de paiement si le ticket a été réglé en plusieurs
+    // fois (paiement combiné). Toujours un tableau — même longueur 1 pour
+    // un paiement simple, pour ne garder qu'un seul chemin de code partout.
+    payments:        row.payments || [{ mode: row.payment_mode, amount: Number(row.total), cashGiven: row.cash_given !== null ? Number(row.cash_given) : null, change: row.change_given !== null ? Number(row.change_given) : null }],
   };
 }
 
@@ -577,16 +581,37 @@ async function sbGetTickets(restoId, sinceDays) {
  * Ne PAS envoyer `number`, `hash` ou `prev_hash` : ils sont ignorés
  * de toute façon si envoyés, la base fait foi.
  */
+/**
+ * Construit le mode de paiement "résumé" stocké en payment_mode à partir
+ * du détail des lignes : le mode lui-même si une seule ligne, sinon un
+ * mode synthétique "Paiement combiné" (utilisé pour les listes/badges).
+ * cash_given / change_given deviennent la somme des lignes en espèces.
+ */
+function summarizePayments(payments) {
+  if (payments.length === 1) {
+    const p = payments[0];
+    return { paymentMode: p.mode, cashGiven: p.mode.requiresCash ? p.cashGiven : null, changeGiven: p.mode.requiresCash ? p.change : null };
+  }
+  const cashLines = payments.filter(p => p.mode.requiresCash);
+  return {
+    paymentMode: { id: 'combined', label: 'Paiement combiné', type: 'other', requiresCash: cashLines.length > 0 },
+    cashGiven: cashLines.length ? cashLines.reduce((s, p) => s + (p.cashGiven || 0), 0) : null,
+    changeGiven: cashLines.length ? cashLines.reduce((s, p) => s + (p.change || 0), 0) : null,
+  };
+}
+
 async function sbCreateTicket(restoId, ticket) {
+  const { paymentMode, cashGiven, changeGiven } = summarizePayments(ticket.payments);
   const row = {
     resto_id:      restoId,
     items:         ticket.items,
     subtotal:      ticket.subtotal,
     discount:      ticket.discount,
     total:         ticket.total,
-    payment_mode:  ticket.paymentMode,
-    cash_given:    ticket.cashGiven,
-    change_given:  ticket.change,
+    payment_mode:  paymentMode,
+    cash_given:    cashGiven,
+    change_given:  changeGiven,
+    payments:      ticket.payments,
     status:        'en_attente',
     employee_id:   ticket.employeeId || null,
     employee_name: ticket.employeeName || null,
@@ -621,6 +646,7 @@ async function sbCancelTicket(restoId, originalTicket, employee) {
     payment_mode:      originalTicket.paymentMode,
     cash_given:        null,
     change_given:      null,
+    payments:          originalTicket.payments.map(p => ({ ...p, amount: -p.amount, cashGiven: null, change: null })),
     status:            'prete',
     employee_id:       employee?.id || null,
     employee_name:     employee?.name || null,

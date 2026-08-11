@@ -12,6 +12,8 @@ let _tickets              = [];
 let _closures              = [];
 let _cart                 = [];
 let _caissePaymentMode    = null;
+let _caisseSplitMode      = false;
+let _caisseSplitLines     = [];
 let _caisseCategory       = 'Tous';
 let _caisseLoadedForResto = null;
 
@@ -34,7 +36,7 @@ function timeAgo(iso) {
 // ═══════════════════════════════════════════════════════════
 async function initCaisse() {
   if (!currentResto) return;
-  if (_caisseLoadedForResto !== currentResto) { _cart = []; _caissePaymentMode = null; _caisseLoadedForResto = currentResto; }
+  if (_caisseLoadedForResto !== currentResto) { _cart = []; _caissePaymentMode = null; _caisseSplitMode = false; _caisseSplitLines = []; _caisseLoadedForResto = currentResto; }
 
   const r = _restos.find(x => x.id === currentResto);
   document.getElementById('caisse-resto-label').textContent = r ? r.name : '';
@@ -48,7 +50,7 @@ async function initCaisse() {
 
   renderCaisseCategories();
   renderCaisseGrid();
-  renderCaissePaymentModes();
+  renderCaissePaymentArea();
   renderCart();
 }
 
@@ -174,6 +176,124 @@ function getCartDiscount(subtotal) {
 }
 function getCartTotal() { const s = getCartSubtotal(); return Math.max(0, s - getCartDiscount(s)); }
 
+/** Bascule entre paiement simple et paiement combiné, en repartant à zéro. */
+function toggleCaisseSplitMode() {
+  _caisseSplitMode  = !_caisseSplitMode;
+  _caisseSplitLines = [];
+  _caissePaymentMode = null;
+  const cashInput = document.getElementById('caisse-cash-given');
+  if (cashInput) cashInput.value = '';
+  renderCaissePaymentArea();
+}
+
+/** Point d'entrée unique : décide d'afficher le sélecteur simple ou le split builder. */
+function renderCaissePaymentArea() {
+  document.getElementById('caisse-split-toggle').innerHTML = _caisseSplitMode
+    ? `<button class="link-btn" onclick="toggleCaisseSplitMode()">← Revenir au paiement simple</button>`
+    : `<button class="link-btn" onclick="toggleCaisseSplitMode()">🔀 Combiner les modes de paiement</button>`;
+
+  if (_caisseSplitMode) {
+    document.getElementById('caisse-payment-modes').style.display = 'none';
+    document.getElementById('caisse-cash-section').style.display = 'none';
+    document.getElementById('caisse-split-section').style.display = 'block';
+    renderCaisseSplitSection();
+  } else {
+    document.getElementById('caisse-payment-modes').style.display = 'flex';
+    document.getElementById('caisse-split-section').style.display = 'none';
+    renderCaissePaymentModes();
+  }
+  renderCartSummary();
+}
+
+function renderCaisseSplitSection() {
+  const icons = { card: '💳', cash: '💵', other: '🎫' };
+  const total = getCartTotal();
+  const allocated = Math.round(_caisseSplitLines.reduce((s, l) => s + l.amount, 0) * 100) / 100;
+  const remaining = Math.max(0, Math.round((total - allocated) * 100) / 100);
+  const complete  = remaining < 0.005;
+
+  const linesHTML = _caisseSplitLines.length === 0 ? '' : `
+    <div class="split-lines">
+      ${_caisseSplitLines.map((l, i) => {
+        const mode = _paymentModes.find(m => m.id === l.modeId);
+        const showChange = mode?.requiresCash && l.cashGiven > l.amount + 0.005;
+        return `<div class="split-line">
+          <span>${icons[mode?.type] || '💳'} ${esc(mode?.label || '?')}${showChange ? `<span class="split-line-change"> — remis ${fmtEUR(l.cashGiven)}, rendu ${fmtEUR(l.cashGiven - l.amount)}</span>` : ''}</span>
+          <span class="mono">${fmtEUR(l.amount)}</span>
+          <button class="cart-remove-btn" aria-label="${'Retirer la ligne ' + esc(mode?.label || '')}" onclick="removeCaisseSplitLine(${i})">✕</button>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  const formHTML = complete ? '' : `
+    <div class="split-form">
+      <select class="select-input w-full" id="split-mode-select" onchange="updateCaisseSplitCashFields()">
+        ${_paymentModes.map(m => `<option value="${m.id}">${icons[m.type] || '💳'} ${esc(m.label)}</option>`).join('')}
+      </select>
+      <input class="search-input w-full" id="split-amount" type="number" min="0.01" step="0.01" value="${remaining.toFixed(2)}" placeholder="Montant (€)">
+      <div id="split-cash-fields"></div>
+      <button class="btn green-btn btn--block" onclick="addCaisseSplitLine()">+ Ajouter cette ligne</button>
+    </div>`;
+
+  document.getElementById('caisse-split-section').innerHTML = `
+    ${linesHTML}
+    <div class="split-summary${complete ? ' split-summary--ok' : ''}">
+      Réparti : <b>${fmtEUR(allocated)}</b> / ${fmtEUR(total)}${complete ? ' — ✓ montant complet' : ` — reste <b>${fmtEUR(remaining)}</b>`}
+    </div>
+    ${formHTML}
+  `;
+  updateCaisseSplitCashFields();
+}
+
+/** Affiche le champ "espèces reçues" + raccourcis billets uniquement si le mode choisi le nécessite. */
+function updateCaisseSplitCashFields() {
+  const sel = document.getElementById('split-mode-select');
+  const field = document.getElementById('split-cash-fields');
+  if (!sel || !field) return;
+  const mode = _paymentModes.find(m => m.id === sel.value);
+  if (mode?.requiresCash) {
+    const amount = parseFloat(document.getElementById('split-amount').value) || 0;
+    field.innerHTML = `
+      <input class="search-input w-full" id="split-cash-given" type="number" min="0" placeholder="Espèces reçues (optionnel, pour le rendu)">
+      <div class="caisse-bills">
+        <button type="button" class="bill-btn" onclick="setCaisseSplitCash(${amount.toFixed(2)})">Exact</button>
+        ${[5, 10, 20, 50].map(b => `<button type="button" class="bill-btn" onclick="setCaisseSplitCash(${b})">${b} €</button>`).join('')}
+      </div>`;
+  } else {
+    field.innerHTML = '';
+  }
+}
+function setCaisseSplitCash(v) { const el = document.getElementById('split-cash-given'); if (el) el.value = v; }
+
+function addCaisseSplitLine() {
+  const modeId = document.getElementById('split-mode-select').value;
+  const mode = _paymentModes.find(m => m.id === modeId);
+  if (!mode) return;
+  const amountInput = parseFloat(document.getElementById('split-amount').value);
+  if (!amountInput || amountInput <= 0) { toast('Montant invalide', 'err'); return; }
+
+  const total = getCartTotal();
+  const allocated = _caisseSplitLines.reduce((s, l) => s + l.amount, 0);
+  const remaining = Math.max(0, total - allocated);
+  // Ne jamais laisser la répartition dépasser le total dû.
+  const amount = Math.round(Math.min(amountInput, remaining + 0.001) * 100) / 100;
+
+  let cashGiven = null;
+  if (mode.requiresCash) {
+    const givenVal = parseFloat(document.getElementById('split-cash-given')?.value);
+    cashGiven = (givenVal && givenVal > amount) ? givenVal : amount;
+  }
+  _caisseSplitLines.push({ modeId, amount, cashGiven });
+  renderCaisseSplitSection();
+  renderCartSummary();
+}
+
+function removeCaisseSplitLine(index) {
+  _caisseSplitLines.splice(index, 1);
+  renderCaisseSplitSection();
+  renderCartSummary();
+}
+
 function renderCaissePaymentModes() {
   const icons = { card: '💳', cash: '💵', other: '🎫' };
   document.getElementById('caisse-payment-modes').innerHTML = _paymentModes.map(m => `
@@ -209,16 +329,22 @@ function renderCartSummary() {
   document.getElementById('cart-discount-amount').textContent = '-' + fmtEUR(discount);
   document.getElementById('cart-total').textContent = fmtEUR(total);
 
-  let cashOk = true;
-  if (_caissePaymentMode?.requiresCash) {
-    const given = parseFloat(document.getElementById('caisse-cash-given').value) || 0;
-    const change = Math.max(0, given - total);
-    document.getElementById('caisse-change').innerHTML = document.getElementById('caisse-cash-given').value
-      ? `Rendu à donner : <b>${fmtEUR(change)}</b>` : '';
-    cashOk = given >= total - 0.001;
+  let canValidate;
+  if (_caisseSplitMode) {
+    const allocated = _caisseSplitLines.reduce((s, l) => s + l.amount, 0);
+    canValidate = _cart.length > 0 && _caisseSplitLines.length > 0 && Math.abs(allocated - total) < 0.01;
+  } else {
+    let cashOk = true;
+    if (_caissePaymentMode?.requiresCash) {
+      const given = parseFloat(document.getElementById('caisse-cash-given').value) || 0;
+      const change = Math.max(0, given - total);
+      document.getElementById('caisse-change').innerHTML = document.getElementById('caisse-cash-given').value
+        ? `Rendu à donner : <b>${fmtEUR(change)}</b>` : '';
+      cashOk = given >= total - 0.001;
+    }
+    canValidate = _cart.length > 0 && _caissePaymentMode && cashOk;
   }
 
-  const canValidate = _cart.length > 0 && _caissePaymentMode && cashOk;
   const btn = document.getElementById('caisse-validate-btn');
   btn.style.opacity = canValidate ? '1' : '.4';
   btn.style.cursor  = canValidate ? 'pointer' : 'not-allowed';
@@ -255,8 +381,19 @@ async function validateCaisseTicket() {
   const discountAmount = getCartDiscount(subtotal);
   const total = Math.max(0, subtotal - discountAmount);
   const discountOn = document.getElementById('caisse-discount-controls').style.display !== 'none';
-  const cashGivenVal = _caissePaymentMode.requiresCash ? (parseFloat(document.getElementById('caisse-cash-given').value) || 0) : null;
-  const changeVal    = _caissePaymentMode.requiresCash ? Math.max(0, cashGivenVal - total) : null;
+
+  let payments;
+  if (_caisseSplitMode) {
+    payments = _caisseSplitLines.map(l => {
+      const mode = _paymentModes.find(m => m.id === l.modeId);
+      const cashGiven = mode.requiresCash ? (l.cashGiven ?? l.amount) : null;
+      return { mode, amount: l.amount, cashGiven, change: mode.requiresCash ? Math.max(0, cashGiven - l.amount) : null };
+    });
+  } else {
+    const cashGivenVal = _caissePaymentMode.requiresCash ? (parseFloat(document.getElementById('caisse-cash-given').value) || 0) : null;
+    const changeVal    = _caissePaymentMode.requiresCash ? Math.max(0, cashGivenVal - total) : null;
+    payments = [{ mode: _caissePaymentMode, amount: total, cashGiven: cashGivenVal, change: changeVal }];
+  }
 
   setLoading(true);
   try {
@@ -268,9 +405,7 @@ async function validateCaisseTicket() {
         amount: discountAmount,
       } : null,
       total,
-      paymentMode: _caissePaymentMode,
-      cashGiven: cashGivenVal,
-      change: changeVal,
+      payments,
       employeeId: currentUser.id,
       employeeName: currentUser.name,
     });
@@ -284,11 +419,13 @@ async function validateCaisseTicket() {
 
     _cart = [];
     _caissePaymentMode = null;
+    _caisseSplitMode = false;
+    _caisseSplitLines = [];
     document.getElementById('caisse-cash-given').value = '';
     document.getElementById('caisse-discount-controls').style.display = 'none';
     document.getElementById('caisse-discount-value').value = '';
     document.getElementById('caisse-cash-section').style.display = 'none';
-    renderCart(); renderCaissePaymentModes();
+    renderCart(); renderCaissePaymentArea();
   } catch (err) { toast('Erreur : ' + err.message, 'err'); }
   finally { setLoading(false); }
 }
@@ -634,7 +771,7 @@ function exportCaisseCSV() {
       t.subtotal.toFixed(2),
       t.discount ? t.discount.amount.toFixed(2) : '0.00',
       t.total.toFixed(2),
-      t.paymentMode?.label || '',
+      t.payments.map(p => `${p.mode.label}: ${p.amount.toFixed(2)}€`).join(' | '),
       t.cancelsTicketId || '',
       t.hash || '',
       t.prevHash || '',
@@ -673,7 +810,11 @@ function openCaisseReceiptModal(ticket) {
       <div class="receipt-line receipt-line--plain red"><span>Remise</span><span class="mono">-${fmtEUR(ticket.discount.amount)}</span></div>
     ` : ''}
     <div class="receipt-total-row"><span>TOTAL</span><span>${fmtEUR(ticket.total)}</span></div>
-    <div class="receipt-meta">Payé par ${esc(ticket.paymentMode?.label || '')}${ticket.paymentMode?.requiresCash ? ` — remis ${fmtEUR(ticket.cashGiven)}, rendu ${fmtEUR(ticket.change)}` : ''}</div>
+    ${ticket.payments.length > 1 ? `
+      <div class="receipt-payments">
+        ${ticket.payments.map(p => `<div class="receipt-payment-line"><span>${esc(p.mode.label)}</span><span class="mono">${fmtEUR(p.amount)}${p.mode.requiresCash && p.cashGiven > p.amount + 0.005 ? ` <span class="receipt-payment-change">(remis ${fmtEUR(p.cashGiven)}, rendu ${fmtEUR(p.cashGiven - p.amount)})</span>` : ''}</span></div>`).join('')}
+      </div>
+    ` : `<div class="receipt-meta">Payé par ${esc(ticket.paymentMode?.label || '')}${ticket.paymentMode?.requiresCash ? ` — remis ${fmtEUR(ticket.cashGiven)}, rendu ${fmtEUR(ticket.change)}` : ''}</div>`}
     ${ticket.type === 'vente' && !alreadyCancelled ? `
       <div class="receipt-cancel-block">
         <button class="btn btn--block btn--red-outline" onclick="cancelCaisseTicket('${ticket.id}')">✕ Annuler ce ticket (émet un avoir)</button>
@@ -753,7 +894,7 @@ function renderCaisseStats() {
   renderCaisseDaysChart(days);
 
   const byPayment = {};
-  _tickets.forEach(t => { const k = t.paymentMode?.label || 'Autre'; byPayment[k] = (byPayment[k] || 0) + t.total; });
+  _tickets.forEach(t => t.payments.forEach(p => { const k = p.mode?.label || 'Autre'; byPayment[k] = (byPayment[k] || 0) + p.amount; }));
   renderCaissePaymentChart(byPayment);
 
   const qtyByProduct = {};
