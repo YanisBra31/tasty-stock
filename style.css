@@ -22,6 +22,62 @@
   --white:      #efefef;
   --muted:      #555;
   --muted2:     #888;
+
+  /* ── Échelle d'espacement ─────────────────────────────
+     Basée sur les valeurs déjà en usage dans le fichier
+     (pas une grille 4px/8px théorique — la réalité du site). */
+  --space-1:  4px;
+  --space-2:  6px;
+  --space-3:  8px;
+  --space-4:  10px;
+  --space-5:  12px;
+  --space-6:  14px;
+  --space-7:  16px;
+  --space-8:  20px;
+  --space-9:  24px;
+  --space-10: 32px;
+
+  /* ── Rayons de bordure ────────────────────────────────
+     2px est déjà le standard de facto (33 usages) ;
+     3px sert pour les éléments légèrement plus grands. */
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-xl: 10px;
+
+  /* ── Échelle typographique ────────────────────────────
+     Reprend les paliers déjà utilisés dans le CSS existant. */
+  --text-2xs: 9px;
+  --text-xs:  10px;
+  --text-sm:  11px;
+  --text-base:12px;
+  --text-md:  13px;
+  --text-lg:  14px;
+  --text-xl:  16px;
+  --text-2xl: 18px;
+  --text-3xl: 22px;
+  --text-4xl: 28px;
+  --text-5xl: 36px;
+  --text-6xl: 44px;
+  --text-7xl: 72px;
+
+  /* ── Focus clavier (accessibilité) ───────────────────── */
+  --focus-ring: 0 0 0 2px var(--dark), 0 0 0 4px var(--pink);
+}
+
+/* ── Focus visible global ───────────────────────────────
+   S'applique à tout élément interactif navigable au clavier ;
+   n'apparaît que lors d'une navigation clavier (pas au clic souris),
+   donc n'ajoute aucun bruit visuel à l'usage normal en tablette/souris. */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
 }
 
 /* ── RESET ──────────────────────────────────── */
@@ -1925,180 +1981,133 @@ td { padding: 10px 14px; font-size: 13px; white-space: nowrap; }
   .mentions-row { grid-template-columns: 1fr; }
   .mentions-label { border-right: none; border-bottom: 1px solid var(--border); }
 }
+/* ═══════════════════════════════════════════════════════════
+   MODULE CAISSE
+═══════════════════════════════════════════════════════════ */
 
-/* ═══════════════════════════════════════════════
-   CAISSE (POS)
-═══════════════════════════════════════════════ */
-#page-caisse.page { padding: 28px 32px; }
+.caisse-layout { display: grid; grid-template-columns: 1.5fr 1fr; gap: 20px; align-items: start; }
+@media (max-width: 980px) { .caisse-layout { grid-template-columns: 1fr; } }
 
-.pos-center-wrap { min-height: 60vh; display: flex; align-items: center; justify-content: center; padding: 24px; }
-
-.pos-setup-card, .pos-lock-card {
-  background: var(--card); border: 1px solid var(--border); border-radius: 4px;
-  padding: 32px 30px; width: 380px; max-width: 100%;
+.caisse-cats { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 16px; }
+.caisse-chip {
+  padding: 5px 12px; border-radius: 2px; font-size: 11px; letter-spacing: .5px;
+  border: 1px solid var(--border); background: var(--card); color: var(--muted2);
+  cursor: pointer; transition: .15s;
 }
-.pos-lock-card { width: 400px; text-align: center; }
-.pos-setup-title, .pos-lock-title {
-  font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: 1px; margin-bottom: 8px;
+.caisse-chip:hover { border-color: var(--border2); color: var(--white); }
+.caisse-chip.active { background: var(--pink-dim); border-color: rgba(255,45,120,.4); color: var(--pink); }
+
+.caisse-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.caisse-tile {
+  background: var(--card); border: 1px solid var(--border); border-radius: 3px;
+  padding: 14px 12px; cursor: pointer; transition: .12s; position: relative;
 }
-.pos-lock-title { justify-content: center; }
-.pos-setup-sub { font-size: 12.5px; color: var(--muted); margin-bottom: 20px; line-height: 1.5; }
+.caisse-tile:hover { border-color: var(--pink); transform: translateY(-2px); }
+.caisse-tile:active { transform: scale(.97); }
+.caisse-tile-name { font-size: 13px; color: var(--white); margin-bottom: 6px; line-height: 1.3; }
+.caisse-tile-price { font-family: 'JetBrains Mono', monospace; font-size: 15px; color: var(--green); font-weight: 600; }
+.caisse-tile-tag { position: absolute; top: 10px; right: 10px; font-size: 10px; color: var(--muted2); }
 
-.pos-avatar-grid { display: flex; flex-wrap: wrap; gap: 16px; justify-content: center; margin-top: 10px; }
-.pos-avatar-tile { width: 88px; text-align: center; cursor: pointer; transition: transform .1s ease; }
-.pos-avatar-tile:hover { transform: translateY(-2px); }
-.pos-avatar-circle {
-  width: 56px; height: 56px; border-radius: 50%; color: #fff; font-weight: 700; font-size: 18px;
-  display: flex; align-items: center; justify-content: center; margin: 0 auto 8px;
+.caisse-ticket-panel { background: var(--card); border: 1px solid var(--border); border-radius: 3px; padding: 20px; position: sticky; top: 0; }
+.ctp-title { font-family: 'Bebas Neue', sans-serif; font-size: 15px; letter-spacing: 2px; color: var(--white); margin-bottom: 14px; }
+
+.cart-list { max-height: 320px; overflow-y: auto; margin-bottom: 10px; }
+.cart-item { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; border-bottom: 1px dashed var(--border); gap: 8px; }
+.cart-item-name { font-size: 13px; color: var(--white); }
+.cart-item-opts { font-size: 10.5px; color: var(--muted2); margin-top: 2px; }
+.cart-item-price { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--muted2); }
+.cart-item-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.cart-qty-btn {
+  width: 22px; height: 22px; border-radius: 2px; border: 1px solid var(--border);
+  background: var(--card2); color: var(--white); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 13px;
 }
-.pos-avatar-name { font-size: 12.5px; font-weight: 600; color: var(--white); }
-.pos-avatar-role { font-size: 10px; color: var(--muted); margin-top: 2px; }
+.cart-qty-btn:hover { border-color: var(--pink); }
+.cart-qty-val { font-family: 'JetBrains Mono', monospace; font-size: 13px; width: 16px; text-align: center; }
+.cart-remove-btn { border: none; background: transparent; color: var(--red); cursor: pointer; font-size: 14px; }
+.cart-empty { font-size: 12.5px; color: var(--muted2); padding: 12px 0; }
+.cart-empty--block { margin-bottom: var(--space-8); }
 
-.pos-link-btn {
-  background: transparent; border: none; color: var(--pink); font-size: 11.5px;
-  cursor: pointer; margin-bottom: 18px; padding: 0;
+/* ── Clôtures de caisse ─────────────────────────────────── */
+.section-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: var(--text-2xl);
+  letter-spacing: 1px;
+  color: var(--white);
+  margin: var(--space-2) 0 var(--space-4);
 }
-.pos-pin-dots { display: flex; justify-content: center; gap: 12px; margin: 18px 0 10px; }
-.pos-pin-dot { width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--border2); transition: background .15s, border-color .15s; }
-.pos-pin-dot.filled { background: var(--white); border-color: var(--white); }
-.pos-pin-dot.err { background: var(--red); border-color: var(--red); }
-.pos-pin-error { color: var(--red); font-size: 12px; margin-bottom: 12px; }
-.pos-keypad { display: grid; grid-template-columns: repeat(3, 62px); gap: 12px; justify-content: center; margin-top: 6px; }
-.pos-keypad-btn {
-  width: 62px; height: 62px; border-radius: 50%; border: 1px solid var(--border); background: var(--dark);
-  color: var(--white); font-family: 'JetBrains Mono', monospace; font-size: 19px; cursor: pointer; transition: border-color .15s, transform .08s;
+.section-title small {
+  font-family: 'DM Sans', sans-serif;
+  font-size: var(--text-xs);
+  color: var(--muted2);
+  letter-spacing: 0;
 }
-.pos-keypad-btn:hover { border-color: var(--pink); }
-.pos-keypad-btn:active { transform: scale(.93); }
-.pos-keypad-del { background: transparent; color: var(--muted2); font-size: 16px; }
-
-/* ── Barre d'onglets caisse ── */
-.pos-topbar {
-  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;
-  background: var(--dark); border: 1px solid var(--border); border-radius: 4px; padding: 10px 14px; margin-bottom: 20px;
+.closure-list { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-8); }
+.closure-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: var(--space-6) var(--space-6);
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm);
 }
-.pos-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
-.pos-tab-btn {
-  display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 3px; border: none;
-  background: transparent; color: var(--muted2); font-family: 'DM Sans', sans-serif; font-size: 12.5px;
-  font-weight: 600; cursor: pointer; transition: background .15s, color .15s;
+.closure-row-title { font-size: var(--text-md); color: var(--white); font-weight: 500; }
+.closure-row-meta { font-size: var(--text-sm); color: var(--muted2); }
+.closure-row-total { font-size: var(--text-lg); color: var(--green); }
+.closure-row-gt { font-size: var(--text-xs); color: var(--muted2); }
+
+/* ── Badge de liaison stock (produit de caisse) ──────────── */
+.stock-link-badge {
+  font-size: var(--text-xs); color: var(--yellow); margin-left: var(--space-1);
+  padding: 2px var(--space-3); background: var(--card2); border-radius: var(--radius-sm);
 }
-.pos-tab-btn:hover { color: var(--white); }
-.pos-tab-btn.active { background: var(--pink); color: #fff; }
-.pos-topbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.pos-chip-btn {
-  display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 3px;
-  border: 1px solid var(--border2); background: transparent; color: var(--muted2);
-  font-family: 'DM Sans', sans-serif; font-size: 11.5px; cursor: pointer; transition: border-color .15s, color .15s, background .15s;
+
+.cart-discount-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.cart-totals { margin: 12px 0; }
+.ct-row { display: flex; justify-content: space-between; font-size: 12.5px; color: var(--muted2); padding: 3px 0; }
+.ct-row.ct-discount span:last-child { color: var(--red); }
+.ct-row.ct-total { font-family: 'Bebas Neue', sans-serif; font-size: 22px; letter-spacing: 1px; color: var(--white); padding: 8px 0; border-top: 1px solid var(--border); margin-top: 4px; }
+.ct-row.ct-total span:last-child { font-family: 'JetBrains Mono', monospace; color: var(--green); }
+
+.caisse-payment-modes { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.caisse-pay-btn {
+  flex: 1 1 30%; padding: 10px 8px; border-radius: 2px; border: 1px solid var(--border);
+  background: var(--card2); color: var(--white); font-size: 12px; cursor: pointer; transition: .12s;
 }
-.pos-chip-btn:hover { border-color: var(--white); color: var(--white); }
-.pos-chip-btn.on { background: var(--green-dim); border-color: var(--green); color: var(--green); }
-.pos-online-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); display: inline-block; }
-.pos-user-chip { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 3px; background: var(--card2); font-size: 12px; color: var(--white); }
-.pos-avatar-sm { width: 24px; height: 24px; border-radius: 50%; color: #fff; font-size: 10.5px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.caisse-pay-btn:hover { border-color: var(--border2); }
+.caisse-pay-btn.active { background: var(--pink); border-color: var(--pink); color: #fff; }
 
-.pos-tab-content { min-height: 300px; }
+.caisse-cash-section { margin-bottom: 12px; }
+.caisse-bills { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.bill-btn { padding: 5px 10px; border-radius: 2px; border: 1px solid var(--border); background: var(--card2); color: var(--white); font-size: 11px; cursor: pointer; }
+.bill-btn:hover { border-color: var(--pink); }
+.caisse-change { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: var(--muted2); }
+.caisse-change b { color: var(--green); }
 
-/* ── Onglet caisse (vente) ── */
-.pos-vente-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 20px; align-items: start; }
-.pos-cat-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
-.pos-cat-chip {
-  padding: 5px 13px; border-radius: 20px; font-size: 11.5px; font-weight: 600; cursor: pointer;
-  border: 1px solid var(--border); background: var(--card); color: var(--muted2); transition: border-color .15s, background .15s, color .15s;
+.commandes-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+.order-card { background: var(--card); border: 1px solid var(--border); border-left: 4px solid var(--orange); border-radius: 3px; padding: 16px; }
+.order-card.done { border-left-color: var(--green); opacity: .55; }
+.order-card-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.order-card-num { font-family: 'Bebas Neue', sans-serif; font-size: 22px; color: var(--white); }
+.order-card-time { font-size: 10.5px; color: var(--muted2); }
+.order-card-emp { font-size: 10.5px; color: var(--muted2); margin-bottom: 10px; }
+.order-card-item { font-size: 14px; font-weight: 600; color: var(--white); margin-bottom: 2px; }
+.order-card-opt { font-size: 11.5px; color: var(--pink); padding-left: 10px; }
+.order-card-btn {
+  width: 100%; padding: 9px 0; margin-top: 10px; border-radius: 2px; border: none;
+  background: var(--green); color: #06251b; font-weight: 700; font-size: 12px; cursor: pointer;
 }
-.pos-cat-chip.active { border-color: var(--pink); background: var(--pink); color: #fff; }
-.pos-product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
-.pos-product-tile {
-  background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 14px 12px;
-  cursor: pointer; position: relative; transition: transform .08s ease, border-color .15s;
-}
-.pos-product-tile:hover { transform: translateY(-2px); border-color: var(--border2); }
-.pos-product-tile:active { transform: scale(.97); }
-.pos-tag-dot { position: absolute; top: 10px; right: 10px; font-size: 11px; }
-.pos-product-name { font-size: 13px; font-weight: 600; color: var(--white); margin-bottom: 6px; line-height: 1.3; }
-.pos-product-price { font-family: 'JetBrains Mono', monospace; font-size: 15px; color: var(--pink); font-weight: 600; }
+.order-card.done .order-card-btn { background: var(--border2); color: var(--muted2); }
 
-.pos-cart-panel { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 16px 18px; }
-.pos-cart-header { display: flex; align-items: center; gap: 8px; font-family: 'Bebas Neue', sans-serif; font-size: 15px; letter-spacing: 1px; margin-bottom: 12px; }
-.pos-cart-empty { font-size: 13px; color: var(--muted); padding: 10px 0 16px; }
-.pos-cart-list { max-height: 320px; overflow-y: auto; }
-.pos-cart-item { display: flex; align-items: center; justify-content: space-between; padding: 9px 0; border-bottom: 1px dashed var(--border); gap: 10px; }
-.pos-cart-item-info { flex: 1; min-width: 0; }
-.pos-cart-item-name { font-size: 13px; font-weight: 500; color: var(--white); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pos-cart-item-opts { font-size: 11px; color: var(--muted); }
-.pos-cart-item-price { font-size: 11.5px; color: var(--muted2); }
-.pos-cart-item-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.pos-round-btn {
-  width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--border2); background: var(--dark);
-  color: var(--white); cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 13px; line-height: 1; padding: 0;
-}
-.pos-round-btn:hover { border-color: var(--pink); }
-.pos-round-btn.danger { border: none; background: transparent; color: var(--red); font-size: 12px; }
+.caisse-receipt-modal { width: 340px; }
+.receipt-line { display: flex; justify-content: space-between; font-size: 12.5px; padding: 6px 0; border-bottom: 1px dashed var(--border); color: var(--white); }
+.receipt-opts { font-size: 10.5px; color: var(--muted2); }
+.receipt-total-row { display: flex; justify-content: space-between; padding: 12px 0 4px; font-family: 'Bebas Neue', sans-serif; font-size: 18px; color: var(--white); }
+.receipt-total-row span:last-child { font-family: 'JetBrains Mono', monospace; color: var(--green); }
+.receipt-meta { font-size: 11px; color: var(--muted2); margin: 10px 0; }
 
-.pos-discount-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
-.pos-summary { padding: 12px 0 2px; }
-.pos-summary-line { display: flex; justify-content: space-between; font-size: 12.5px; padding: 2px 0; }
-.pos-summary-line.muted { color: var(--muted2); }
-.pos-summary-total { display: flex; justify-content: space-between; align-items: baseline; padding: 8px 0 4px; font-family: 'Bebas Neue', sans-serif; font-size: 15px; }
-.pos-summary-total .mono { font-family: 'JetBrains Mono', monospace; font-size: 24px; font-weight: 600; color: var(--white); letter-spacing: 0; }
-
-.pos-pay-modes { display: flex; gap: 8px; margin: 8px 0 10px; flex-wrap: wrap; }
-.pos-pay-btn {
-  flex: 1 1 30%; display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 10px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--dark);
-  color: var(--white); font-size: 12px; font-weight: 600; cursor: pointer; transition: border-color .15s, background .15s;
-}
-.pos-pay-btn.active { border-color: var(--pink); background: var(--pink); color: #fff; }
-.pos-cash-block { margin-bottom: 6px; }
-.pos-bill-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
-
-/* ── Onglet commandes ── */
-.pos-order-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
-.pos-order-card { background: var(--card); border: 1px solid var(--border); border-left: 4px solid var(--orange); border-radius: 6px; padding: 14px 16px; }
-.pos-order-card.done { border-left-color: var(--green); opacity: .6; }
-.pos-order-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
-.pos-order-num { font-family: 'Bebas Neue', sans-serif; font-size: 20px; }
-.pos-order-time { font-size: 11px; color: var(--muted); }
-.pos-order-emp { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
-.pos-order-items { margin-bottom: 10px; }
-
-/* ── Onglets Produits / Équipe / Réglages ── */
-.pos-two-col { display: grid; grid-template-columns: 1fr 1.3fr; gap: 20px; align-items: start; }
-.pos-form-card { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 18px; }
-.pos-form-title { font-family: 'Bebas Neue', sans-serif; font-size: 15px; letter-spacing: .5px; margin-bottom: 14px; }
-.pos-draft-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; background: var(--dark); border: 1px solid var(--border); border-radius: 5px; margin-bottom: 4px; font-size: 12.5px; }
-.pos-catalog-row { padding: 10px 14px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; }
-.pos-badge-cat { font-size: 10.5px; color: var(--muted2); margin-left: 8px; padding: 2px 8px; background: var(--card2); border-radius: 20px; }
-
-/* ── Onglet historique ── */
-.pos-history-row { cursor: pointer; display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; transition: border-color .15s; }
-.pos-history-row:hover { border-color: var(--border2); }
-
-/* ── Onglet stats ── */
-.pos-top-row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
-.pos-top-row:last-child { border-bottom: none; }
-
-/* ── Modales caisse (réutilise .modal-overlay / .modal) ── */
-.pos-option-row {
-  display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border-radius: 6px;
-  border: 1px solid var(--border); cursor: pointer; font-size: 13px; transition: border-color .15s;
-}
-.pos-option-row.checked { border-color: var(--pink); background: var(--card2); }
-.pos-option-row input { margin-right: 8px; }
-
-/* ── Impression ticket / bon cuisine (imprimante thermique 58/80mm) ── */
-.pos-print-area { display: none; }
-body.pos-printing > *:not(#pos-print-area) { display: none !important; }
-body.pos-printing #pos-print-area { display: block; }
-@page pos-roll-58 { size: 58mm auto; margin: 2mm; }
-@page pos-roll-80 { size: 80mm auto; margin: 2mm; }
+/* ── IMPRESSION BON DE CUISINE ── */
+.kitchen-ticket { display: none; }
 @media print {
-  body.pos-printing #pos-print-area { color: #000; font-family: 'JetBrains Mono', monospace; margin: 0 auto; }
-  body.pos-printing #pos-print-area.pos-w58 { page: pos-roll-58; width: 54mm; }
-  body.pos-printing #pos-print-area.pos-w80 { page: pos-roll-80; width: 76mm; }
-}
-
-/* ── Responsive ── */
-@media (max-width: 1100px) {
-  .pos-vente-grid, .pos-two-col { grid-template-columns: 1fr; }
+  body.kitchen-print-mode > *:not(#kitchen-ticket-print) { display: none !important; }
+  body.kitchen-print-mode #kitchen-ticket-print {
+    display: block !important; width: 280px; margin: 0; color: #000; background: #fff;
+    font-family: 'JetBrains Mono', monospace;
+  }
 }
