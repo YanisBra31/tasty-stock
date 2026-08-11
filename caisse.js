@@ -844,6 +844,107 @@ async function cancelCaisseTicket(id) {
   finally { setLoading(false); }
 }
 
+/**
+ * Génère un reçu PDF pour un ticket — pensé pour être envoyé à un client
+ * (fond blanc, sobre), à la différence des rapports internes du Dashboard
+ * qui reprennent le thème sombre du site. Réutilise jsPDF déjà chargé
+ * (voir export.js) : aucune dépendance supplémentaire.
+ */
+function generateCaisseReceiptPDF(ticket) {
+  let jsPDFClass = null;
+  if (window.jspdf && window.jspdf.jsPDF) jsPDFClass = window.jspdf.jsPDF;
+  else if (window.jsPDF) jsPDFClass = window.jsPDF;
+  if (!jsPDFClass) { toast('Bibliothèque PDF non chargée', 'err'); return null; }
+
+  const resto = _restos.find(r => r.id === currentResto) || { name: '', location: '' };
+  const doc = new jsPDFClass({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const W = doc.internal.pageSize.getWidth();
+  const margin = 18;
+  let y = 22;
+
+  const DARK = [30, 30, 30], MUTED = [120, 120, 120], LINE = [220, 220, 220], RED = [200, 40, 40];
+  const setColor = (c) => doc.setTextColor(c[0], c[1], c[2]);
+  const hLine = () => { doc.setDrawColor(LINE[0], LINE[1], LINE[2]); doc.setLineWidth(0.3); doc.line(margin, y, W - margin, y); };
+  const newPageIfNeeded = () => { if (y > 270) { doc.addPage(); y = 20; } };
+
+  // ── En-tête ──
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(18); setColor(DARK);
+  doc.text(resto.name || 'Reçu', margin, y);
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); setColor(MUTED);
+  doc.text(`Ticket #${ticket.number} — ${new Date(ticket.dateISO || Date.now()).toLocaleString('fr-FR')}`, W - margin, y, { align: 'right' });
+  if (resto.location) doc.text(resto.location, margin, y + 5);
+  if (ticket.employeeName) doc.text(`Vendeur : ${ticket.employeeName}`, W - margin, y + 5, { align: 'right' });
+
+  y += 14; hLine(); y += 8;
+
+  if (ticket.type === 'annulation') {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(10); setColor(RED);
+    doc.text('AVOIR / ANNULATION', margin, y);
+    y += 8;
+  }
+
+  // ── Articles ──
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(9); setColor(MUTED);
+  doc.text('ARTICLE', margin, y);
+  doc.text('MONTANT', W - margin, y, { align: 'right' });
+  y += 2; hLine(); y += 6;
+
+  ticket.items.forEach(item => {
+    newPageIfNeeded();
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10); setColor(DARK);
+    doc.text(`${item.qty} × ${item.name}`, margin, y);
+    doc.text(fmtEUR(item.unitPrice * item.qty), W - margin, y, { align: 'right' });
+    y += 5;
+    if (item.options?.length) {
+      doc.setFont('helvetica', 'italic'); doc.setFontSize(8); setColor(MUTED);
+      doc.text(item.options.map(o => o.label).join(', '), margin + 4, y);
+      doc.setFont('helvetica', 'normal');
+      y += 4.5;
+    }
+  });
+
+  y += 3; hLine(); y += 8;
+
+  if (ticket.discount) {
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(9); setColor(MUTED);
+    doc.text('Sous-total', margin, y); doc.text(fmtEUR(ticket.subtotal), W - margin, y, { align: 'right' }); y += 5;
+    doc.text('Remise', margin, y); doc.text('-' + fmtEUR(ticket.discount.amount), W - margin, y, { align: 'right' }); y += 7;
+  }
+
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(14); setColor(DARK);
+  doc.text('TOTAL', margin, y);
+  doc.text(fmtEUR(ticket.total), W - margin, y, { align: 'right' });
+  y += 10;
+
+  // ── Détail du paiement (simple ou combiné) ──
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(9); setColor(MUTED);
+  ticket.payments.forEach(p => {
+    doc.text(p.mode.label, margin, y);
+    doc.text(fmtEUR(p.amount), W - margin, y, { align: 'right' });
+    y += 5;
+    if (p.mode.requiresCash && p.cashGiven > p.amount + 0.005) {
+      doc.setFontSize(8);
+      doc.text(`remis ${fmtEUR(p.cashGiven)}, rendu ${fmtEUR(p.cashGiven - p.amount)}`, margin + 4, y);
+      doc.setFontSize(9);
+      y += 4.5;
+    }
+  });
+
+  y += 8; hLine(); y += 8;
+  doc.setFont('helvetica', 'italic'); doc.setFontSize(9); setColor(MUTED);
+  doc.text('Merci de votre visite !', margin, y);
+
+  return doc;
+}
+
+/** Télécharge le reçu PDF — l'utilisateur peut ensuite le joindre lui-même à un e-mail. */
+function downloadCaisseReceiptPDF(ticket) {
+  const doc = generateCaisseReceiptPDF(ticket);
+  if (!doc) return;
+  doc.save(`recu-ticket-${ticket.number}.pdf`);
+  sbLog('caisse.recu_pdf', `Ticket #${ticket.number}`, null);
+}
+
 function emailCaisseTicket() {
   const t = _viewingTicket;
   if (!t) return;
@@ -854,7 +955,8 @@ function emailCaisseTicket() {
     ...lines, '',
     t.discount ? `Sous-total : ${fmtEUR(t.subtotal)}` : null,
     t.discount ? `Remise : -${fmtEUR(t.discount.amount)}` : null,
-    `Total : ${fmtEUR(t.total)}`, `Paiement : ${t.paymentMode?.label || ''}`,
+    `Total : ${fmtEUR(t.total)}`,
+    ...t.payments.map(p => `Payé (${p.mode.label}) : ${fmtEUR(p.amount)}`),
   ].filter(Boolean).join('\n');
   const mailto = `mailto:?subject=${encodeURIComponent('Ticket #' + t.number + ' — ' + (resto ? resto.name : ''))}&body=${encodeURIComponent(body)}`;
   window.open(mailto, '_blank');

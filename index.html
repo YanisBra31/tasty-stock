@@ -695,7 +695,8 @@
 <!-- Modal reçu / ticket -->
 <div id="caisse-receipt-modal-overlay" class="modal-overlay" onclick="if(event.target.id==='caisse-receipt-modal-overlay')closeCaisseReceiptModal()">
   <div class="modal caisse-receipt-modal">
-    <div class="caisse-noprint" style="display:flex;justify-content:flex-end;gap:14px;margin-bottom:8px">
+    <div class="caisse-noprint receipt-actions">
+      <button class="btn" onclick="downloadCaisseReceiptPDF(_viewingTicket)">📄 PDF</button>
       <button class="btn" onclick="emailCaisseTicket()">✉ Email</button>
       <button class="btn" onclick="printCaisseKitchenTicket(_viewingTicket)">🖨 Bon cuisine</button>
       <button class="btn-cancel" onclick="closeCaisseReceiptModal()">Fermer</button>

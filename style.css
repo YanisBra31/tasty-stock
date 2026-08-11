@@ -2182,6 +2182,7 @@ td { padding: var(--space-4) var(--space-6); font-size: var(--text-md); white-sp
 .receipt-payments { margin: var(--space-4) 0; }
 .receipt-payment-line { display: flex; justify-content: space-between; font-size: var(--text-sm); color: var(--muted2); padding: 2px 0; }
 .receipt-payment-change { color: var(--muted); font-size: var(--text-xs); }
+.receipt-actions { display: flex; justify-content: flex-end; gap: var(--space-6); margin-bottom: var(--space-3); }
 
 /* ── IMPRESSION BON DE CUISINE ── */
 .kitchen-ticket { display: none; }
